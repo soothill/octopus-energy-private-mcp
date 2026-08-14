@@ -1,0 +1,58 @@
+{
+  "name": "octopus-energy-private-mcp",
+  "version": "0.1.0",
+  "description": "Privacy-first local MCP server for Octopus Energy usage, tariff and smart-device analysis",
+  "type": "module",
+  "bin": {
+    "octopus-energy-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx --env-file-if-exists=.env src/index.ts",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:stdio": "node scripts/stdio-smoke.mjs",
+    "check": "npm run typecheck && npm run test && npm run build && npm run test:stdio"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "octopus-energy",
+    "energy",
+    "smart-meter",
+    "agile-octopus"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/soothill/octopus-energy-private-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/soothill/octopus-energy-private-mcp/issues"
+  },
+  "homepage": "https://github.com/soothill/octopus-energy-private-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "luxon": "3.7.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/luxon": "3.7.1",
+    "@types/node": "24.10.1",
+    "tsx": "4.20.6",
+    "typescript": "6.0.2",
+    "vitest": "4.1.10"
+  }
+}

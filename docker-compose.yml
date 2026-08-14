@@ -1,0 +1,15 @@
+services:
+  octopus-energy-mcp:
+    build:
+      context: .
+    image: octopus-energy-private-mcp:local
+    stdin_open: true
+    env_file:
+      - .env
+    environment:
+      OCTOPUS_CACHE_DIR: /data/cache
+    volumes:
+      - octopus-energy-cache:/data/cache
+
+volumes:
+  octopus-energy-cache:
