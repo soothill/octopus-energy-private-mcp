@@ -14,7 +14,7 @@
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx --env-file-if-exists=.env src/index.ts",
+    "dev": "npm run build && npm start",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
@@ -51,7 +51,7 @@
     "@modelcontextprotocol/client": "2.0.0",
     "@types/luxon": "3.7.1",
     "@types/node": "24.10.1",
-    "tsx": "4.20.6",
+    "esbuild": "0.28.2",
     "typescript": "6.0.2",
     "vitest": "4.1.10"
   }
