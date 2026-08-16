@@ -26,7 +26,7 @@ function parseBoundary(value: string, timezone: string, endBoundary: boolean): D
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
   let parsed = dateOnly
     ? DateTime.fromISO(value, { zone: timezone }).startOf("day")
-    : DateTime.fromISO(value, { setZone: true });
+    : DateTime.fromISO(value, { zone: timezone, setZone: true });
   if (!parsed.isValid) {
     throw new Error(`Invalid ISO date/time: ${value}`);
   }

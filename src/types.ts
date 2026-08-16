@@ -92,7 +92,15 @@ export interface PagedResponse<T> {
   results: T[];
 }
 
-export interface PaginatedResult<T> {
+export type CacheStatus = "disabled" | "hit" | "miss" | "stale" | "mixed";
+
+export interface CacheProvenance {
+  cache_status: CacheStatus;
+  stale_cache_used: boolean;
+  cache_age_ms?: number;
+}
+
+export interface PaginatedResult<T> extends CacheProvenance {
   count: number;
   results: T[];
   pages_fetched: number;

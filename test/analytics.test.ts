@@ -82,6 +82,16 @@ describe("tariff analytics", () => {
     expect(windows[0]?.start).toBe("2026-01-01T00:00:00Z");
   });
 
+  it("rejects rates whose actual duration is not half an hour", () => {
+    expect(() => findCheapestWindows([{
+      value_exc_vat: 10,
+      value_inc_vat: 12,
+      valid_from: "2026-01-01T00:00:00Z",
+      valid_to: "2026-01-01T01:00:00Z",
+      payment_method: null
+    }], 1, 5)).toThrow("exactly 30 minutes");
+  });
+
   it("charges standing rates for every requested local day even when readings are missing", () => {
     const standing: RateRecord[] = [{
       value_exc_vat: 40,
@@ -100,5 +110,21 @@ describe("tariff analytics", () => {
     );
     expect(result.standing_charge_days).toBe(2);
     expect(result.standing_charge_pence).toBe(84);
+  });
+
+  it("deduplicates consumption intervals before tariff replay", () => {
+    const result = estimateCost(
+      [consumption[0]!, consumption[0]!],
+      [unitRates[0]!],
+      [],
+      { fuel: "electricity", product_code: "TEST", tariff_code: "E-1R-TEST-A" },
+      "UTC"
+    );
+
+    expect(result.consumption_kwh).toBe(1);
+    expect(result.unit_cost_pence).toBe(12);
+    expect(result.priced_intervals).toBe(1);
+    expect(result.rate_coverage_percent).toBe(100);
+    expect(result.warnings).toContain("1 duplicate consumption interval was removed before pricing.");
   });
 });

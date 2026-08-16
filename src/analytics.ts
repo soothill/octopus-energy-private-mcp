@@ -74,6 +74,24 @@ function roundHalfEven(value: number, places = 2): number {
   return Math.round(scaled) / factor;
 }
 
+function deduplicateConsumption(records: ConsumptionRecord[]): {
+  records: ConsumptionRecord[];
+  duplicateCount: number;
+} {
+  const unique = new Map<string, ConsumptionRecord>();
+  let duplicateCount = 0;
+  for (const record of records) {
+    if (unique.has(record.interval_start)) duplicateCount += 1;
+    unique.set(record.interval_start, record);
+  }
+  return {
+    records: [...unique.values()].sort(
+      (a, b) => Date.parse(a.interval_start) - Date.parse(b.interval_start)
+    ),
+    duplicateCount
+  };
+}
+
 function aggregate(records: ConsumptionRecord[], key: (date: DateTime) => string, timezone: string): UsageBucket[] {
   const totals = new Map<string, UsageBucket>();
   for (const record of records) {
@@ -97,16 +115,8 @@ export function analyseUsage(
   gasM3ToKwhFactor: number,
   requestedRange?: Pick<PeriodRange, "from" | "to">
 ): UsageAnalysis {
-  const unique = new Map<string, ConsumptionRecord>();
-  let duplicates = 0;
-  for (const record of rawRecords) {
-    if (unique.has(record.interval_start)) duplicates += 1;
-    unique.set(record.interval_start, record);
-  }
-  const deduplicated = [...unique.values()].sort(
-    (a, b) => Date.parse(a.interval_start) - Date.parse(b.interval_start)
-  );
-  const normalized = normalizeConsumption(deduplicated, fuel, gasUnit, gasM3ToKwhFactor);
+  const deduplicated = deduplicateConsumption(rawRecords);
+  const normalized = normalizeConsumption(deduplicated.records, fuel, gasUnit, gasM3ToKwhFactor);
   const records = normalized.records;
   const total = records.reduce((sum, record) => sum + record.consumption, 0);
   const first = records[0];
@@ -191,7 +201,7 @@ export function analyseUsage(
       expected_half_hour_intervals: expected,
       observed_unique_intervals: records.length,
       coverage_percent: expected ? round(Math.min(100, (records.length / expected) * 100), 2) : 0,
-      duplicate_intervals: duplicates,
+      duplicate_intervals: deduplicated.duplicateCount,
       gaps: gaps.slice(0, 100)
     },
     warnings: [
@@ -235,12 +245,13 @@ export function estimateCost(
   timezone: string,
   requestedRange?: Pick<PeriodRange, "from" | "to">
 ): CostEstimate {
+  const deduplicated = deduplicateConsumption(consumption);
   let unitCost = 0;
   let consumptionKwh = 0;
   let pricedIntervals = 0;
   let unpricedIntervals = 0;
   const days = new Set<string>();
-  for (const record of consumption) {
+  for (const record of deduplicated.records) {
     const instant = Date.parse(record.interval_start);
     const rate = matchingRate(unitRates, instant);
     consumptionKwh += record.consumption;
@@ -274,6 +285,11 @@ export function estimateCost(
   }
   const total = unitCost + standingCost;
   const warnings: string[] = [];
+  if (deduplicated.duplicateCount) {
+    warnings.push(
+      `${deduplicated.duplicateCount} duplicate consumption ${deduplicated.duplicateCount === 1 ? "interval was" : "intervals were"} removed before pricing.`
+    );
+  }
   if (unpricedIntervals) warnings.push(`${unpricedIntervals} consumption intervals had no matching unit rate.`);
   if (pricedDays < days.size) warnings.push(`${days.size - pricedDays} days had no matching standing charge.`);
   warnings.push("This is an estimate from consumption and published VAT-inclusive rates, not a bill calculation.");
@@ -291,7 +307,9 @@ export function estimateCost(
     priced_intervals: pricedIntervals,
     unpriced_intervals: unpricedIntervals,
     standing_charge_days: pricedDays,
-    rate_coverage_percent: consumption.length ? round((pricedIntervals / consumption.length) * 100, 2) : 0,
+    rate_coverage_percent: deduplicated.records.length
+      ? round((pricedIntervals / deduplicated.records.length) * 100, 2)
+      : 0,
     warnings
   };
 }
@@ -310,9 +328,17 @@ export function findCheapestWindows(
   limit: number
 ): CheapestWindow[] {
   if (slots < 1) throw new Error("slots must be at least 1");
-  const ordered = [...rates]
-    .filter((rate) => rate.valid_to)
-    .sort((a, b) => Date.parse(a.valid_from) - Date.parse(b.valid_from));
+  const ordered = [...rates].sort((a, b) => Date.parse(a.valid_from) - Date.parse(b.valid_from));
+  for (const rate of ordered) {
+    const start = Date.parse(rate.valid_from);
+    const end = rate.valid_to ? Date.parse(rate.valid_to) : Number.NaN;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      throw new Error("Cheapest windows require rates with valid start and end timestamps");
+    }
+    if (end - start !== 30 * 60 * 1000) {
+      throw new Error("Cheapest windows require rate intervals that are exactly 30 minutes long");
+    }
+  }
   const windows: CheapestWindow[] = [];
   for (let index = 0; index <= ordered.length - slots; index += 1) {
     const slice = ordered.slice(index, index + slots);

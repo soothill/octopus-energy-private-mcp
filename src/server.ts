@@ -5,10 +5,11 @@ import { analyseUsage, compareAnalyses, estimateCost, findCheapestWindows, norma
 import { FileCache } from "./cache.js";
 import { publicConfig, type ServerConfig } from "./config.js";
 import { OctopusGraphQlClient } from "./graphql-client.js";
-import { OctopusRestClient, productCodeFromTariff } from "./octopus-client.js";
+import { isDualRegisterTariff, OctopusRestClient, productCodeFromTariff } from "./octopus-client.js";
 import { PERIOD_ALIASES, previousEquivalentPeriod, resolvePeriod } from "./periods.js";
 import { RequestRateLimiter } from "./rate-limiter.js";
 import type {
+  CacheProvenance,
   ConsumptionRecord,
   Fuel,
   GasConsumptionUnit,
@@ -108,6 +109,22 @@ function activeRate(rates: RateRecord[], at: number): RateRecord | null {
     const to = rate.valid_to ? Date.parse(rate.valid_to) : Number.POSITIVE_INFINITY;
     return from <= at && at < to;
   }) ?? null;
+}
+
+function cacheProvenance(value: CacheProvenance): CacheProvenance {
+  return {
+    cache_status: value.cache_status,
+    stale_cache_used: value.stale_cache_used,
+    ...(value.cache_age_ms === undefined ? {} : { cache_age_ms: value.cache_age_ms })
+  };
+}
+
+function assertCostTariffSupported(tariffCode: string): void {
+  if (isDualRegisterTariff(tariffCode)) {
+    throw new Error(
+      "Cost replay does not support two-register tariffs because aggregate half-hour readings do not identify day and night registers"
+    );
+  }
 }
 
 function redactAccountAddresses(value: unknown): unknown {
@@ -277,7 +294,8 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
           api_count: result.data.count,
           records_returned: result.data.results.length,
           pages_fetched: result.data.pages_fetched,
-          truncated: result.data.truncated
+          truncated: result.data.truncated,
+          ...cacheProvenance(result.data)
         },
         analysis: analyseUsage(
           result.data.results,
@@ -334,10 +352,20 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
         config.gasM3ToKwhFactor,
         comparisonRange
       );
+      if (current.data.stale_cache_used) {
+        currentAnalysis.warnings.unshift("Current-period consumption came from an expired cache after a transient API failure.");
+      }
+      if (comparison.data.stale_cache_used) {
+        comparisonAnalysis.warnings.unshift("Comparison-period consumption came from an expired cache after a transient API failure.");
+      }
       return {
         meter: current.meter,
         current_period: currentRange,
         comparison_period: comparisonRange,
+        cache: {
+          current: cacheProvenance(current.data),
+          comparison: cacheProvenance(comparison.data)
+        },
         ...compareAnalyses(currentAnalysis, comparisonAnalysis)
       };
     })
@@ -361,11 +389,34 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     safe(async (args) => {
       const target = targetFromInput(args);
       const range = resolvePeriod(args, config.timezone);
+      if (isDualRegisterTariff(target.tariff_code)) {
+        const [dayUnitRates, nightUnitRates, standingCharges] = await Promise.all([
+          rest.getTariffRates(target, "day", range.from, range.to),
+          rest.getTariffRates(target, "night", range.from, range.to),
+          rest.getTariffRates(target, "standing", range.from, range.to)
+        ]);
+        return {
+          target,
+          requested_period: range,
+          rate_structure: "dual_register",
+          day_unit_rates: dayUnitRates,
+          night_unit_rates: nightUnitRates,
+          standing_charges: standingCharges,
+          cost_replay_supported: false
+        };
+      }
       const [unitRates, standingCharges] = await Promise.all([
         rest.getTariffRates(target, "unit", range.from, range.to),
         rest.getTariffRates(target, "standing", range.from, range.to)
       ]);
-      return { target, requested_period: range, unit_rates: unitRates, standing_charges: standingCharges };
+      return {
+        target,
+        requested_period: range,
+        rate_structure: "single_register",
+        unit_rates: unitRates,
+        standing_charges: standingCharges,
+        cost_replay_supported: true
+      };
     })
   );
 
@@ -373,7 +424,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     "octopus_get_current_rates",
     {
       title: "Get current tariff rates",
-      description: "Return the rate and standing charge active now plus the next 24 hours of unit rates.",
+      description: "Return the current published single rate or register-specific day/night rates and standing charge.",
       inputSchema: z.object({
         fuel: z.enum(["electricity", "gas"]),
         tariff_code: z.string().min(1),
@@ -386,6 +437,27 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       const now = DateTime.now();
       const from = now.minus({ hours: 2 }).toUTC().toISO()!;
       const to = now.plus({ hours: 24 }).toUTC().toISO()!;
+      if (isDualRegisterTariff(target.tariff_code)) {
+        const [dayUnitRates, nightUnitRates, standingCharges] = await Promise.all([
+          rest.getTariffRates(target, "day", from, to),
+          rest.getTariffRates(target, "night", from, to),
+          rest.getTariffRates(target, "standing", from, to)
+        ]);
+        return {
+          target,
+          rate_structure: "dual_register",
+          as_of: now.toUTC().toISO(),
+          current_day_unit_rate: activeRate(dayUnitRates.results, now.toMillis()),
+          current_night_unit_rate: activeRate(nightUnitRates.results, now.toMillis()),
+          current_standing_charge: activeRate(standingCharges.results, now.toMillis()),
+          cache: {
+            day_unit_rates: cacheProvenance(dayUnitRates),
+            night_unit_rates: cacheProvenance(nightUnitRates),
+            standing_charges: cacheProvenance(standingCharges)
+          },
+          cost_replay_supported: false
+        };
+      }
       const [unitRates, standingCharges] = await Promise.all([
         rest.getTariffRates(target, "unit", from, to),
         rest.getTariffRates(target, "standing", from, to)
@@ -395,6 +467,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
         as_of: now.toUTC().toISO(),
         current_unit_rate: activeRate(unitRates.results, now.toMillis()),
         current_standing_charge: activeRate(standingCharges.results, now.toMillis()),
+        cache: {
+          unit_rates: cacheProvenance(unitRates),
+          standing_charges: cacheProvenance(standingCharges)
+        },
         upcoming_unit_rates: unitRates.results
           .filter((rate) => Date.parse(rate.valid_from) >= now.toMillis())
           .sort((a, b) => Date.parse(a.valid_from) - Date.parse(b.valid_from))
@@ -419,6 +495,9 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     },
     safe(async (args) => {
       const target = targetFromInput(args);
+      if (isDualRegisterTariff(target.tariff_code)) {
+        throw new Error("Cheapest time windows are not available for register-based day/night tariffs");
+      }
       const range = resolvePeriod(args, config.timezone);
       const rates = await rest.getTariffRates(target, "unit", range.from, range.to);
       return {
@@ -426,7 +505,8 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
         requested_period: range,
         duration_minutes: args.duration_minutes,
         windows: findCheapestWindows(rates.results, args.duration_minutes / 30, args.limit),
-        rates_truncated: rates.truncated
+        rates_truncated: rates.truncated,
+        rates_cache: cacheProvenance(rates)
       };
     })
   );
@@ -449,6 +529,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     gasUnit: GasConsumptionUnit
   ) => {
     if (target.fuel !== meter.fuel) throw new Error("Tariff fuel must match the selected meter fuel");
+    assertCostTariffSupported(target.tariff_code);
+    if (meter.direction === "export") {
+      throw new Error("Cost replay supports import meters only; export readings represent tariff revenue, not usage cost");
+    }
     const normalized = normalizeConsumption(records, meter.fuel, gasUnit, config.gasM3ToKwhFactor);
     if (normalized.unit !== "kWh") {
       throw new Error("Cost estimation needs consumption in kWh; set gas_unit to kwh or m3 for gas meters");
@@ -466,6 +550,12 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       range
     );
     estimate.warnings.unshift(...normalized.warnings);
+    if (unitRates.stale_cache_used) {
+      estimate.warnings.unshift("Unit rates came from an expired cache after a transient API failure.");
+    }
+    if (standingCharges.stale_cache_used) {
+      estimate.warnings.unshift("Standing charges came from an expired cache after a transient API failure.");
+    }
     if (unitRates.truncated || standingCharges.truncated) {
       estimate.warnings.unshift("One or more rate responses were truncated by configured safety limits.");
     }
@@ -476,11 +566,12 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     "octopus_estimate_cost",
     {
       title: "Estimate tariff cost",
-      description: "Replay actual interval consumption against one tariff's unit rates and standing charges. This is an estimate, not a bill.",
+      description: "Replay import consumption against one single-register tariff's unit rates and standing charges. This is an estimate, not a bill.",
       inputSchema: costInput,
       annotations: readOnly
     },
     safe(async (args) => {
+      assertCostTariffSupported(args.tariff_code);
       const usage = await consumptionFor({ ...args, fuel: args.fuel ?? args.tariff_fuel, group_by: "half_hour" });
       const target = targetFromInput({
         fuel: args.tariff_fuel ?? usage.meter.fuel,
@@ -495,6 +586,9 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
         target,
         args.gas_unit ?? config.gasConsumptionUnit
       );
+      if (usage.data.stale_cache_used) {
+        estimate.warnings.unshift("Consumption came from an expired cache after a transient API failure.");
+      }
       return { meter: usage.meter, requested_period: usage.range, estimate };
     })
   );
@@ -503,7 +597,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     "octopus_compare_tariffs",
     {
       title: "Compare tariff costs",
-      description: "Replay the same actual consumption against up to ten tariffs and rank the estimated totals.",
+      description: "Replay the same import consumption against up to ten single-register tariffs and rank the estimated totals.",
       inputSchema: z.object({
         ...periodFields,
         ...meterFields,
@@ -518,6 +612,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       annotations: readOnly
     },
     safe(async (args) => {
+      for (const tariff of args.tariffs) assertCostTariffSupported(tariff.tariff_code);
       const usage = await consumptionFor({ ...args, group_by: "half_hour" });
       const estimates = await Promise.all(
         args.tariffs.map((item) => calculateEstimate(
@@ -528,6 +623,11 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
           args.gas_unit ?? config.gasConsumptionUnit
         ))
       );
+      if (usage.data.stale_cache_used) {
+        for (const estimate of estimates) {
+          estimate.warnings.unshift("Consumption came from an expired cache after a transient API failure.");
+        }
+      }
       estimates.sort((a, b) => a.total_cost_pence - b.total_cost_pence);
       const cheapest = estimates[0];
       return {

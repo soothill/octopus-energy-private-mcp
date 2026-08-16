@@ -18,13 +18,14 @@ This implementation was built because the available projects did not combine all
 ## Privacy and safety by design
 
 - Runs as a local stdio process; it does not listen on a network port.
-- Hard-codes `https://api.octopus.energy` as its only production outbound origin.
+- Hard-codes `https://api.octopus.energy` as its only production outbound origin and disables automatic HTTP redirects.
 - Sends the API key only to Octopus: REST uses Basic authentication; GraphQL exchanges it for a short-lived token held only in memory.
 - Has no telemetry, analytics service or third-party network dependency at runtime.
 - Stores repeatable responses only in a local cache with hashed filenames, a private directory and private files.
 - Omits addresses from the account tool unless `include_addresses=true` is explicitly supplied.
 - Exposes only named, read-only Octopus operations. There is no arbitrary URL or arbitrary GraphQL tool.
 - Queues requests, waits at least one second by default, caps calls at 30 requests/minute, follows `Retry-After`, backs off on transient failures, coalesces duplicate in-flight requests, and limits pagination/records per tool call.
+- Uses expired cache data only after transient failures and labels it with cache status, age and analysis warnings.
 - Marks every remote tool read-only. The only destructive tool clears local cache files and requires `confirm=true`.
 
 Read [SECURITY.md](SECURITY.md) for the threat model and credential-handling details.
@@ -134,7 +135,7 @@ The server also publishes two resources (`octopus://server/configuration` and `o
 
 ### Periods and meters
 
-Tools accept `today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `last_7_days`, `last_30_days`, `this_year`, or `last_year`. You can instead provide both `period_from` and `period_to` as ISO timestamps or dates. Date-only end values are inclusive; timestamp ends are exclusive.
+Tools accept `today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `last_7_days`, `last_30_days`, `this_year`, or `last_year`. You can instead provide both `period_from` and `period_to` as ISO timestamps or dates. Date-only end values are inclusive; timestamp ends are exclusive. Timestamps without an explicit offset use `OCTOPUS_TIMEZONE`; timestamps with `Z` or another offset preserve it.
 
 Meter details are auto-discovered. If more than one meter matches, provide a fuel, direction, property ID, MPAN/MPRN (`meter_point`) or serial number. The server fails with a useful list instead of silently choosing the wrong meter.
 
@@ -147,6 +148,8 @@ For m3, the default 11.184 kWh/m3 conversion is an estimate. Real bills use a vo
 ### Cost caveats
 
 Cost tools match each consumption interval to published VAT-inclusive rates, round interval consumption half-to-even to 0.01 kWh as documented by Octopus, and add the applicable daily standing charge. They do not reproduce discounts, credits, export payments, debt, taxes outside the published rate, special eligibility rules, meter-specific gas calorific values or Octopus’s complete billing engine. Results are comparisons and estimates, not quotes or bills.
+
+Two-register electricity tariffs expose separate day and night feeds through the rate tools. Cost replay rejects those tariffs because aggregate half-hour consumption does not identify the billed register. Export meters are also rejected by cost tools because their readings represent tariff revenue rather than import cost. Cheapest-window analysis accepts only finite, contiguous 30-minute rate records.
 
 ## Configuration
 

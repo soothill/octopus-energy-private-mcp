@@ -7,6 +7,8 @@ import {
 import type { RequestRateLimiter } from "./rate-limiter.js";
 import type {
   Account,
+  CacheProvenance,
+  CacheStatus,
   ConsumptionRecord,
   Direction,
   Fuel,
@@ -19,7 +21,7 @@ import type {
 
 export interface RequestResult<T> {
   data: T;
-  cache: "hit" | "miss" | "stale" | "disabled";
+  cache: Exclude<CacheStatus, "mixed">;
   cache_age_ms?: number;
 }
 
@@ -46,6 +48,8 @@ export interface ConsumptionOptions extends MeterSelector {
   order_by?: "period" | "-period";
   page_size?: number;
 }
+
+export type TariffRateKind = "unit" | "day" | "night" | "standing";
 
 interface RequestOptions {
   authenticated: boolean;
@@ -128,6 +132,24 @@ export class OctopusRestClient {
     return exponential + Math.floor(this.random() * 250);
   }
 
+  private isTransientFailure(error: unknown): boolean {
+    return error instanceof TypeError ||
+      (error instanceof DOMException && error.name === "TimeoutError") ||
+      (error instanceof OctopusApiError && error.retryable);
+  }
+
+  private withCacheProvenance<T extends object>(
+    data: T,
+    response: Pick<RequestResult<unknown>, "cache" | "cache_age_ms">
+  ): T & CacheProvenance {
+    return {
+      ...data,
+      cache_status: response.cache,
+      stale_cache_used: response.cache === "stale",
+      ...(response.cache_age_ms === undefined ? {} : { cache_age_ms: response.cache_age_ms })
+    };
+  }
+
   private safeApiMessage(payload: unknown, status: number): string {
     if (payload && typeof payload === "object") {
       const record = payload as Record<string, unknown>;
@@ -170,6 +192,7 @@ export class OctopusRestClient {
         response = await this.fetchFn(url, {
           method: options.method ?? "GET",
           headers,
+          redirect: "manual",
           ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
           signal: AbortSignal.timeout(this.config.timeoutMs)
         });
@@ -179,7 +202,11 @@ export class OctopusRestClient {
           try {
             payload = JSON.parse(text);
           } catch {
-            throw new OctopusApiError(`Octopus Energy API returned non-JSON HTTP ${response.status}`, response.status);
+            throw new OctopusApiError(
+              `Octopus Energy API returned non-JSON HTTP ${response.status}`,
+              response.status,
+              response.status === 429 || response.status >= 500
+            );
           }
         }
         if (response.ok) {
@@ -199,7 +226,9 @@ export class OctopusRestClient {
       }
       await this.sleep(this.retryDelay(response, attempt));
     }
-    if (stale) return { data: stale.value, cache: "stale", cache_age_ms: stale.ageMs };
+    if (stale && this.isTransientFailure(finalError)) {
+      return { data: stale.value, cache: "stale", cache_age_ms: stale.ageMs };
+    }
     if (finalError instanceof Error) throw finalError;
     throw new Error("Octopus Energy API request failed");
   }
@@ -216,6 +245,8 @@ export class OctopusRestClient {
     const results: T[] = [];
     let pagesFetched = 0;
     let count = 0;
+    const cacheStatuses = new Set<Exclude<CacheStatus, "mixed">>();
+    let cacheAgeMs: number | undefined;
     while (next && pagesFetched < this.config.maxPagesPerCall && results.length < this.config.maxRecordsPerCall) {
       const page: RequestResult<PagedResponse<T>> = await this.requestJson(next, {
         authenticated,
@@ -224,27 +255,33 @@ export class OctopusRestClient {
         allowStaleOnError: true
       });
       count = page.data.count;
+      cacheStatuses.add(page.cache);
+      if (page.cache_age_ms !== undefined) cacheAgeMs = Math.max(cacheAgeMs ?? 0, page.cache_age_ms);
       results.push(...page.data.results.slice(0, this.config.maxRecordsPerCall - results.length));
       pagesFetched += 1;
       next = page.data.next ? this.safeUrl(page.data.next) : null;
     }
+    const cacheStatus = cacheStatuses.size === 1 ? [...cacheStatuses][0]! : "mixed";
     return {
       count,
       results,
       pages_fetched: pagesFetched,
-      truncated: Boolean(next) || results.length < count
+      truncated: Boolean(next) || results.length < count,
+      cache_status: cacheStatus,
+      stale_cache_used: cacheStatuses.has("stale"),
+      ...(cacheAgeMs === undefined ? {} : { cache_age_ms: cacheAgeMs })
     };
   }
 
-  async getAccount(accountOverride?: string): Promise<Account> {
+  async getAccount(accountOverride?: string): Promise<Account & CacheProvenance> {
     const account = this.requireAccountNumber(accountOverride);
     const response = await this.requestJson<Account>(`accounts/${encodeURIComponent(account)}/`, {
       authenticated: true,
       cacheNamespace: "account",
       cacheTtlMs: 60 * 60 * 1000,
-      allowStaleOnError: true
+      allowStaleOnError: false
     });
-    return response.data;
+    return this.withCacheProvenance(response.data, response);
   }
 
   async discoverMeters(accountOverride?: string): Promise<MeterDescriptor[]> {
@@ -362,24 +399,36 @@ export class OctopusRestClient {
     return this.paginate<Product>(url, false, "products", 6 * 60 * 60 * 1000, 100);
   }
 
-  async getProduct(productCode: string): Promise<Product> {
+  async getProduct(productCode: string): Promise<Product & CacheProvenance> {
     const response = await this.requestJson<Product>(`products/${encodeURIComponent(productCode)}/`, {
       authenticated: false,
       cacheNamespace: "products",
       cacheTtlMs: 6 * 60 * 60 * 1000,
       allowStaleOnError: true
     });
-    return response.data;
+    return this.withCacheProvenance(response.data, response);
   }
 
   async getTariffRates(
     target: Pick<MeterDescriptor, "fuel"> & { product_code: string; tariff_code: string },
-    kind: "unit" | "standing",
+    kind: TariffRateKind,
     periodFrom?: string,
     periodTo?: string
   ): Promise<PaginatedResult<RateRecord>> {
+    if ((kind === "day" || kind === "night") && target.fuel !== "electricity") {
+      throw new Error("Day and night rate feeds are available only for electricity tariffs");
+    }
+    if (kind === "unit" && isDualRegisterTariff(target.tariff_code)) {
+      throw new Error("This is a two-register tariff; request its day and night rate feeds separately");
+    }
     const tariffType = target.fuel === "electricity" ? "electricity-tariffs" : "gas-tariffs";
-    const rateType = kind === "unit" ? "standard-unit-rates" : "standing-charges";
+    const rateType = kind === "unit"
+      ? "standard-unit-rates"
+      : kind === "day"
+        ? "day-unit-rates"
+        : kind === "night"
+          ? "night-unit-rates"
+          : "standing-charges";
     const url = this.safeUrl(
       `products/${encodeURIComponent(target.product_code)}/${tariffType}/${encodeURIComponent(target.tariff_code)}/${rateType}/`
     );
@@ -396,4 +445,8 @@ export function productCodeFromTariff(tariffCode: string): string {
     throw new Error("Could not derive a product code from tariff_code; supply product_code explicitly");
   }
   return match[1];
+}
+
+export function isDualRegisterTariff(tariffCode: string): boolean {
+  return /^E-2R-/.test(tariffCode.trim().toUpperCase());
 }

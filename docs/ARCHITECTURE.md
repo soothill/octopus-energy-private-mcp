@@ -19,7 +19,7 @@ McpServer tools/resources/prompts
       └── /v1/graphql/ named read queries
 ```
 
-No component listens on a TCP port. The production clients reject any URL whose protocol/origin is not exactly `https://api.octopus.energy`, including pagination links returned by the API.
+No component listens on a TCP port. The production clients reject any URL whose protocol/origin is not exactly `https://api.octopus.energy`, including pagination links returned by the API, and do not follow HTTP redirects automatically.
 
 ## Modules
 
@@ -41,7 +41,7 @@ No component listens on a TCP port. The production clients reject any URL whose 
 - Tariff rates: 30 minutes.
 - GraphQL: 30 seconds to one hour depending on volatility.
 
-Expired values are used only as a resilience fallback after a request fails. Cache keys can contain personal identifiers in memory but are converted to SHA-256 filenames; only response payloads and expiry metadata are written.
+Expired values are used only as a resilience fallback after transient network, timeout, `429` or `5xx` failures. Permanent authentication, validation and GraphQL errors are never masked. Returned data includes cache status, stale-use and age metadata; analysis and cost tools also add warnings when stale inputs were used. Cache keys can contain personal identifiers in memory but are converted to SHA-256 filenames; only response payloads and expiry metadata are written.
 
 ## Rate and size controls
 
@@ -51,4 +51,4 @@ Pagination is capped by both pages and records per MCP call. Tools return `trunc
 
 ## Analytics boundaries
 
-All analytics execute locally. Raw records are deduplicated and sorted. The analysis reports coverage, duplicates and gaps instead of presenting incomplete data as complete. Tariff replay uses exact product/tariff codes and published VAT-inclusive rates. Gas conversion and billing limitations remain explicit in every affected result.
+All analytics execute locally. Raw records are deduplicated and sorted before both analysis and tariff replay. The analysis reports coverage, duplicates and gaps instead of presenting incomplete data as complete. Tariff replay uses exact single-register import product/tariff codes and published VAT-inclusive rates. Two-register day/night feeds remain available for inspection but are not replayed against aggregate readings; export readings are not presented as import cost. Gas conversion and billing limitations remain explicit in every affected result.

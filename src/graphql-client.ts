@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { FileCache } from "./cache.js";
 import { OCTOPUS_GRAPHQL_URL, OCTOPUS_REST_ORIGIN, type ServerConfig } from "./config.js";
 import type { RequestRateLimiter } from "./rate-limiter.js";
+import type { CacheProvenance } from "./types.js";
 
 interface GraphQlEnvelope<T> {
   data?: T;
@@ -13,6 +14,13 @@ interface GraphQlEnvelope<T> {
 
 interface TokenMutation {
   obtainKrakenToken?: { token?: string };
+}
+
+class TransientGraphQlError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransientGraphQlError";
+  }
 }
 
 export interface GraphQlClientOptions {
@@ -66,12 +74,26 @@ export class OctopusGraphQlClient {
     return Date.now() + 55 * 60 * 1000;
   }
 
+  private withCacheProvenance<T extends Record<string, unknown>>(
+    data: T,
+    cacheStatus: "disabled" | "hit" | "miss" | "stale",
+    cacheAgeMs?: number
+  ): T & CacheProvenance {
+    return {
+      ...data,
+      cache_status: cacheStatus,
+      stale_cache_used: cacheStatus === "stale",
+      ...(cacheAgeMs === undefined ? {} : { cache_age_ms: cacheAgeMs })
+    };
+  }
+
   private async rawRequest<T>(
     query: string,
     variables: Record<string, unknown>,
     token?: string
   ): Promise<T> {
     let lastError: Error | undefined;
+    let lastFailureTransient = false;
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt += 1) {
       let response: Response | undefined;
       try {
@@ -81,23 +103,28 @@ export class OctopusGraphQlClient {
         response = await this.fetchFn(this.url, {
           method: "POST",
           headers,
+          redirect: "manual",
           body: JSON.stringify({ query, variables }),
           signal: AbortSignal.timeout(this.config.timeoutMs)
         });
-        const envelope = (await response.json()) as GraphQlEnvelope<T>;
         if (!response.ok) {
           lastError = new Error(`Octopus Energy GraphQL returned HTTP ${response.status}`);
-        } else if (envelope.errors?.length) {
-          const summaries = envelope.errors.slice(0, 5).map((error) => {
-            const code = error.extensions?.errorCode ?? error.extensions?.code;
-            const rawMessage = error.message ?? "Unknown GraphQL error";
-            const message = this.config.apiKey ? rawMessage.replaceAll(this.config.apiKey, "[REDACTED]") : rawMessage;
-            return `${code ? `[${code}] ` : ""}${message}`;
-          });
-          throw new Error(`Octopus Energy GraphQL error: ${summaries.join("; ")}`);
-        } else if (envelope.data === undefined) {
-          throw new Error("Octopus Energy GraphQL returned no data");
+          lastFailureTransient = response.status === 429 || response.status >= 500;
+          if (!lastFailureTransient || attempt >= this.config.maxRetries) break;
         } else {
+          const envelope = (await response.json()) as GraphQlEnvelope<T>;
+          if (envelope.errors?.length) {
+            const summaries = envelope.errors.slice(0, 5).map((error) => {
+              const code = error.extensions?.errorCode ?? error.extensions?.code;
+              const rawMessage = error.message ?? "Unknown GraphQL error";
+              const message = this.config.apiKey ? rawMessage.replaceAll(this.config.apiKey, "[REDACTED]") : rawMessage;
+              return `${code ? `[${code}] ` : ""}${message}`;
+            });
+            throw new Error(`Octopus Energy GraphQL error: ${summaries.join("; ")}`);
+          }
+          if (envelope.data === undefined) {
+            throw new Error("Octopus Energy GraphQL returned no data");
+          }
           return envelope.data;
         }
       } catch (error) {
@@ -107,6 +134,7 @@ export class OctopusGraphQlClient {
           (error instanceof DOMException && error.name === "TimeoutError") ||
           response?.status === 429 ||
           (response?.status !== undefined && response.status >= 500);
+        lastFailureTransient = retryable;
         if (!retryable || attempt >= this.config.maxRetries) break;
       }
       const retryAfter = response?.headers.get("retry-after");
@@ -115,6 +143,7 @@ export class OctopusGraphQlClient {
         : Math.min(30_000, 750 * 2 ** attempt);
       await this.sleep(Math.min(120_000, retryMs));
     }
+    if (lastError && lastFailureTransient) throw new TransientGraphQlError(lastError.message);
     throw lastError ?? new Error("Octopus Energy GraphQL request failed");
   }
 
@@ -133,22 +162,24 @@ export class OctopusGraphQlClient {
     return token;
   }
 
-  private async query<T>(
+  private async query<T extends Record<string, unknown>>(
     operationName: string,
     query: string,
     variables: Record<string, unknown>,
     ttlMs: number
-  ): Promise<T> {
+  ): Promise<T & CacheProvenance> {
     const key = `graphql:${operationName}:${createHash("sha256").update(JSON.stringify(variables)).digest("hex")}`;
     const cached = await this.cache.get<T>(key);
-    if (cached) return cached.value;
+    if (cached) return this.withCacheProvenance(cached.value, "hit", cached.ageMs);
     const stale = await this.cache.get<T>(key, true);
     try {
       const data = await this.rawRequest<T>(query, variables, await this.accessToken());
       await this.cache.set(key, "graphql", data, ttlMs);
-      return data;
+      return this.withCacheProvenance(data, this.cache.enabled ? "miss" : "disabled");
     } catch (error) {
-      if (stale) return stale.value;
+      if (stale && error instanceof TransientGraphQlError) {
+        return this.withCacheProvenance(stale.value, "stale", stale.ageMs);
+      }
       throw error;
     }
   }

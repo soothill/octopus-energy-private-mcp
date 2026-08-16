@@ -21,6 +21,23 @@ describe("period resolution", () => {
     expect(period.to).toBe("2026-01-03T00:00:00.000Z");
   });
 
+  it("interprets offset-less timestamps in the configured timezone", () => {
+    const local = resolvePeriod(
+      { period_from: "2026-07-01T12:00", period_to: "2026-07-01T13:00" },
+      "Europe/London",
+      now
+    );
+    const explicitUtc = resolvePeriod(
+      { period_from: "2026-07-01T12:00Z", period_to: "2026-07-01T13:00Z" },
+      "Europe/London",
+      now
+    );
+
+    expect(local.from).toBe("2026-07-01T11:00:00.000Z");
+    expect(local.to).toBe("2026-07-01T12:00:00.000Z");
+    expect(explicitUtc.from).toBe("2026-07-01T12:00:00.000Z");
+  });
+
   it("creates an immediately preceding equivalent period", () => {
     const prior = previousEquivalentPeriod({
       from: "2026-08-01T00:00:00.000Z",

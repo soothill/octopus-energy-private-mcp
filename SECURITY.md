@@ -6,7 +6,7 @@ Security fixes are applied to the latest release and the default branch.
 
 ## Credential boundary
 
-The production server has exactly one permitted outbound origin: `https://api.octopus.energy`.
+The production server has exactly one permitted outbound origin: `https://api.octopus.energy`. Both HTTP clients disable automatic redirects so a response cannot move credentials or private request data outside that boundary.
 
 - REST account and consumption requests use the API key as the Basic-auth username with a blank password, as Octopus specifies.
 - GraphQL authentication sends the key in the `obtainKrakenToken` mutation. The returned JWT is kept only in process memory and renewed before expiry.
