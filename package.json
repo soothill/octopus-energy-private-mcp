@@ -20,6 +20,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:stdio": "node scripts/stdio-smoke.mjs",
+    "setup:codex": "node scripts/print-codex-config.mjs",
     "check": "npm run typecheck && npm run test && npm run build && npm run test:stdio"
   },
   "engines": {

@@ -4,6 +4,12 @@ A privacy-first, local Model Context Protocol server for querying and analysing 
 
 This is an independent community project. It is not affiliated with or endorsed by Octopus Energy.
 
+## New to MCP? Start here
+
+You do not need coding experience to install this project. Follow the [interactive setup website](https://octopus-energy-private-mcp-guide.darren138956.chatgpt.site) or the [beginner installation guide](docs/INSTALLATION.md). Both explain every step for Mac, Windows and Linux, including where to click, what to copy, how to keep your API key private, how to connect ChatGPT desktop or Codex, and how to fix the most common problems.
+
+After preparing the project, run `npm run setup:codex` to print the exact, secret-free connection details for your computer.
+
 ## What the research found
 
 As of **14 August 2026**, I found no MCP server published by Octopus Energy in its official API documentation or public `octopus-energy` GitHub organisation. I did find community implementations:
@@ -33,6 +39,8 @@ Read [SECURITY.md](SECURITY.md) for the threat model and credential-handling det
 ## Quick start
 
 Requirements: Node.js 22 or newer, an Octopus Energy API key, and your account number.
+
+If terms such as Terminal, Node.js, or `.env` are unfamiliar, use the [plain-English beginner guide](docs/INSTALLATION.md) instead of this condensed section.
 
 ```bash
 git clone https://github.com/soothill/octopus-energy-private-mcp.git
