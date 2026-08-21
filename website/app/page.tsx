@@ -372,6 +372,11 @@ export default function Home() {
             <p>That is expected. This local MCP runs on your computer, so use the ChatGPT desktop app or another local Codex client rather than a normal browser tab.</p>
           </details>
           <details>
+            <summary>I see “a newer version is available” <span>+</span></summary>
+            <p><strong>If you installed with Git:</strong> open Terminal or PowerShell in the MCP folder and run <code>git pull --ff-only</code>, <code>npm ci</code>, and <code>npm run build</code>, then restart ChatGPT or Codex.</p>
+            <p><strong>If you downloaded a ZIP:</strong> keep a safe copy of <code>.env</code>, download and unpack the latest ZIP, copy <code>.env</code> into the new folder, run <code>npm ci</code>, <code>npm run build</code>, and <code>npm run setup:codex</code>, update the saved MCP path, then restart the app.</p>
+          </details>
+          <details>
             <summary>I still need help <span>+</span></summary>
             <p>Open a GitHub issue with your operating system, the failed step, the error message, and <code>node --version</code>. Never include your API key, account number, address, or <code>.env</code> file.</p>
           </details>
@@ -388,6 +393,7 @@ export default function Home() {
           <li><span>✓</span> Sends credentials only to Octopus Energy</li>
           <li><span>i</span> Sends energy results to your selected AI client and model</li>
           <li><span>i</span> Your AI provider’s privacy and data controls apply to those results</li>
+          <li><span>i</span> Checks the public GitHub version at startup unless you disable it</li>
           <li><span>✓</span> Remote energy tools are read-only</li>
         </ul>
       </section>

@@ -14,6 +14,7 @@ export interface ServerConfig {
   timezone: string;
   cacheDir: string;
   cacheEnabled: boolean;
+  updateCheckEnabled: boolean;
   requestsPerMinute: number;
   minRequestIntervalMs: number;
   timeoutMs: number;
@@ -84,6 +85,7 @@ export function loadConfig(): ServerConfig {
     cacheDir:
       optionalEnv("OCTOPUS_CACHE_DIR") ?? join(homedir(), ".cache", "octopus-energy-mcp"),
     cacheEnabled: booleanEnv("OCTOPUS_CACHE_ENABLED", true),
+    updateCheckEnabled: booleanEnv("OCTOPUS_UPDATE_CHECK_ENABLED", true),
     requestsPerMinute: integerEnv("OCTOPUS_REQUESTS_PER_MINUTE", 30, 1, 120),
     minRequestIntervalMs: integerEnv("OCTOPUS_MIN_REQUEST_INTERVAL_MS", 1000, 100, 60_000),
     timeoutMs: integerEnv("OCTOPUS_REQUEST_TIMEOUT_MS", 20_000, 1000, 120_000),
@@ -106,6 +108,7 @@ export function publicConfig(config: ServerConfig): Record<string, unknown> {
     timezone: config.timezone,
     cache_enabled: config.cacheEnabled,
     cache_directory: config.cacheDir,
+    update_check_enabled: config.updateCheckEnabled,
     requests_per_minute: config.requestsPerMinute,
     minimum_request_interval_ms: config.minRequestIntervalMs,
     request_timeout_ms: config.timeoutMs,
@@ -115,6 +118,9 @@ export function publicConfig(config: ServerConfig): Record<string, unknown> {
     maximum_records_per_tool_call: config.maxRecordsPerCall,
     gas_consumption_unit: config.gasConsumptionUnit,
     gas_m3_to_kwh_factor: config.gasM3ToKwhFactor,
-    allowed_outbound_hosts: ["api.octopus.energy"]
+    allowed_outbound_hosts: [
+      "api.octopus.energy",
+      ...(config.updateCheckEnabled ? ["api.github.com"] : [])
+    ]
   };
 }

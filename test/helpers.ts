@@ -9,6 +9,7 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     timezone: "Europe/London",
     cacheDir: "/private/tmp/octopus-mcp-test-cache",
     cacheEnabled: false,
+    updateCheckEnabled: false,
     requestsPerMinute: 120,
     minRequestIntervalMs: 100,
     timeoutMs: 5000,

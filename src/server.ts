@@ -8,6 +8,8 @@ import { OctopusGraphQlClient } from "./graphql-client.js";
 import { isDualRegisterTariff, OctopusRestClient, productCodeFromTariff } from "./octopus-client.js";
 import { PERIOD_ALIASES, previousEquivalentPeriod, resolvePeriod } from "./periods.js";
 import { RequestRateLimiter } from "./rate-limiter.js";
+import { formatUpdateNotice, notCheckedUpdateStatus, type UpdateStatus } from "./update-check.js";
+import { CURRENT_VERSION } from "./version.js";
 import type {
   CacheProvenance,
   ConsumptionRecord,
@@ -146,6 +148,7 @@ export interface ServerDependencies {
   limiter?: RequestRateLimiter;
   rest?: OctopusRestClient;
   graphql?: OctopusGraphQlClient;
+  updateStatus?: UpdateStatus;
 }
 
 export function createServer(config: ServerConfig, dependencies: ServerDependencies = {}): McpServer {
@@ -153,12 +156,15 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
   const limiter = dependencies.limiter ?? new RequestRateLimiter(config.requestsPerMinute, config.minRequestIntervalMs);
   const rest = dependencies.rest ?? new OctopusRestClient(config, cache, limiter);
   const graphql = dependencies.graphql ?? new OctopusGraphQlClient(config, cache, limiter);
+  const updateStatus = dependencies.updateStatus ?? notCheckedUpdateStatus(CURRENT_VERSION);
+  const updateNotice = formatUpdateNotice(updateStatus);
   const server = new McpServer(
-    { name: "octopus-energy-private-mcp", version: "0.1.0" },
+    { name: "octopus-energy-private-mcp", version: CURRENT_VERSION },
     {
       capabilities: { tools: {}, resources: {}, prompts: {} },
       instructions:
-        "Privacy-first, read-only Octopus Energy access. Start with octopus_connection_status and octopus_discover_meters. Prefer named periods and local analysis tools; use exact tariff codes for costs. Respect truncated flags and unit/cost warnings. Requests are locally throttled and cached. Credentials may only be sent to api.octopus.energy; never ask the user to paste them into chat. octopus_clear_cache only deletes local response files and requires confirm=true."
+        "Privacy-first, read-only Octopus Energy access. Start with octopus_connection_status and octopus_discover_meters. Prefer named periods and local analysis tools; use exact tariff codes for costs. Respect truncated flags and unit/cost warnings. Requests are locally throttled and cached. Credentials may only be sent to api.octopus.energy; never ask the user to paste them into chat. octopus_clear_cache only deletes local response files and requires confirm=true." +
+        (updateNotice ? ` IMPORTANT: Tell the user about this update before using other tools. ${updateNotice}` : "")
     }
   );
 
@@ -188,11 +194,15 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     safe(async () => ({
       ready_for_account_queries: Boolean(config.apiKey && config.accountNumber),
       configuration: publicConfig(config),
+      update: updateStatus,
       cache: await cache.stats(),
       local_rate_limiter: limiter.snapshot(),
       privacy: {
         transport: "local stdio",
-        outbound_allowlist: ["api.octopus.energy"],
+        outbound_allowlist: [
+          "api.octopus.energy",
+          ...(config.updateCheckEnabled ? ["api.github.com"] : [])
+        ],
         credentials_logged: false,
         graphql_tokens_persisted: false,
         telemetry: false
@@ -829,6 +839,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
 const CAPABILITIES_GUIDE = `# Octopus Energy private MCP
 
 This local stdio server sends credentials and account identifiers only to \`api.octopus.energy\`.
+At startup, an optional anonymous version check reads only the public package version from \`api.github.com\`; its result is included in \`octopus_connection_status\`.
 
 1. Start with \`octopus_connection_status\` and \`octopus_discover_meters\`.
 2. Use \`octopus_get_consumption\` for raw intervals or server-side grouping.
@@ -836,5 +847,5 @@ This local stdio server sends credentials and account identifiers only to \`api.
 4. Use exact tariff codes with rate, cheapest-window, cost, and comparison tools.
 5. Device telemetry, dispatches, Octoplus points, and Octopus quota status use documented read-only GraphQL operations.
 
-Every network request is queued behind the configured local throttle. Pagination and record counts are capped per tool call, and repeatable responses are cached locally with hashed filenames.
+Every Octopus Energy request is queued behind the configured local throttle. Pagination and record counts are capped per tool call, and repeatable responses are cached locally with hashed filenames.
 `;

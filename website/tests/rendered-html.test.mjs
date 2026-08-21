@@ -35,6 +35,9 @@ test("server-renders the complete beginner installation guide", async () => {
   assert.match(html, /Check that it works/);
   assert.match(html, /Sends energy results to your selected AI client and model/);
   assert.match(html, /AI provider.s privacy and data controls apply to those results/);
+  assert.match(html, /a newer version is available/);
+  assert.match(html, /Checks the public GitHub version at startup unless you disable it/);
+  assert.match(html, /git pull --ff-only/);
   assert.match(html, /application\/ld\+json/);
   assert.match(html, /HowTo/);
   assert.match(html, /FAQPage/);

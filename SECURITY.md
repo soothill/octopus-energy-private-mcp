@@ -6,13 +6,15 @@ Security fixes are applied to the latest release and the default branch.
 
 ## Credential boundary
 
-The production server has exactly one permitted outbound origin: `https://api.octopus.energy`. Both HTTP clients disable automatic redirects so a response cannot move credentials or private request data outside that boundary.
+Authenticated energy requests have exactly one permitted outbound origin: `https://api.octopus.energy`. Both Octopus HTTP clients disable automatic redirects so a response cannot move credentials or private request data outside that boundary.
 
 - REST account and consumption requests use the API key as the Basic-auth username with a blank password, as Octopus specifies.
 - GraphQL authentication sends the key in the `obtainKrakenToken` mutation. The returned JWT is kept only in process memory and renewed before expiry.
 - Neither credential is used in cache keys, filenames, MCP responses or logs.
 - API errors are sanitised to replace any accidental API-key echo with `[REDACTED]`.
 - The server has no telemetry, crash reporter or arbitrary HTTP/GraphQL execution tool.
+
+By default, startup also makes one anonymous, unauthenticated request to `https://api.github.com` to read the public `package.json` on this repository’s `main` branch. That request includes only a generic user-agent containing the installed MCP version. It never includes an Octopus credential, account identifier, energy result or cache value; redirects are rejected; the response size is bounded; and the check fails open after two seconds. Set `OCTOPUS_UPDATE_CHECK_ENABLED=false` to disable it completely.
 
 Environment variables and `.env` are still local secret storage. Keep `.env` mode-restricted, never commit it, and prefer your operating system’s secret mechanism or inherited environment where practical. Anyone who can inspect the MCP host process may be able to inspect its environment.
 

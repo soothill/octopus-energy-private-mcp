@@ -274,6 +274,14 @@ Never include your API key, account number, address, meter identifiers, `.env` f
 
 ## Updating later
 
+Each time the MCP starts, it anonymously checks the version declared in this project’s public GitHub `main` branch. If that version is newer, ChatGPT or Codex receives a notice containing the installed and latest versions plus the relevant update steps below. The same secret-free notice is written to the MCP’s local error/log channel, and `octopus_connection_status` reports the result.
+
+The check sends no Octopus API key, account number, energy data or cache content. It makes one request to `api.github.com`, rejects redirects, gives up after two seconds, and never prevents the MCP from starting. To disable the check, add this line to `.env` and restart the app:
+
+```dotenv
+OCTOPUS_UPDATE_CHECK_ENABLED=false
+```
+
 If you downloaded a ZIP:
 
 1. Keep a safe copy of your `.env` file.
@@ -314,6 +322,7 @@ If you changed `OCTOPUS_CACHE_DIR` in `.env`, remove that configured directory i
 - The MCP runs as a local process and does not open a network port.
 - It sends credentials only to `api.octopus.energy` and refuses automatic redirects.
 - It has no third-party analytics or telemetry.
+- By default, startup anonymously reads the public project version from `api.github.com`; it sends no Octopus credentials or energy data and can be disabled with `OCTOPUS_UPDATE_CHECK_ENABLED=false`.
 - It supplies returned account and energy data to the selected AI client and model; that provider’s privacy and data controls apply.
 - It exposes named Octopus operations rather than arbitrary web or GraphQL access.
 - Remote tools are read-only. The only destructive tool clears local cache files and requires confirmation.

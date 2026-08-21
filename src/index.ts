@@ -2,10 +2,21 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { loadConfig } from "./config.js";
 import { createServer } from "./server.js";
+import { checkForUpdates, formatUpdateNotice } from "./update-check.js";
+import { CURRENT_VERSION } from "./version.js";
 
 try {
   const config = loadConfig();
-  const handle = serveStdio(() => createServer(config), {
+  const updateStatus = await checkForUpdates({
+    enabled: config.updateCheckEnabled,
+    currentVersion: CURRENT_VERSION
+  });
+  const updateNotice = formatUpdateNotice(updateStatus);
+  if (updateNotice) {
+    process.stderr.write(`${updateNotice}\n`);
+  }
+
+  const handle = serveStdio(() => createServer(config, { updateStatus }), {
     onerror: (error) => process.stderr.write(`[octopus-energy-mcp] ${error.message}\n`)
   });
 
