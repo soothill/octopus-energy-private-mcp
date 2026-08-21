@@ -92,8 +92,8 @@ export default function Home() {
           <h1>Ask better questions about your energy use.</h1>
           <p className="hero-intro">
             Connect your Octopus Energy account to ChatGPT desktop or Codex in about
-            15 minutes. Your credentials stay on your computer, and this guide walks
-            through every click.
+            15 minutes. Your API credentials are read locally and sent only to Octopus
+            Energy. Returned energy data is supplied to the AI client you choose.
           </p>
           <div className="hero-actions">
             <a className="button button-primary" href="#setup">
@@ -120,7 +120,7 @@ export default function Home() {
           </div>
           <div className="privacy-note">
             <span aria-hidden="true">✓</span>
-            <p><strong>Runs on your computer</strong><br />No third-party analytics or telemetry</p>
+            <p><strong>Runs on your computer</strong><br />No separate MCP cloud server or telemetry</p>
           </div>
         </aside>
       </section>
@@ -128,7 +128,7 @@ export default function Home() {
       <section className="signal-strip" aria-label="Guide summary">
         <div>
           <span>Local MCP / 01</span>
-          <p>Private energy data. Clear setup. No cloud middleman.</p>
+          <p>Local credentials. Clear setup. No public MCP server.</p>
           <p>Mac · Windows · Linux</p>
         </div>
       </section>
@@ -381,12 +381,13 @@ export default function Home() {
       <section className="privacy-section">
         <div>
           <p className="section-kicker">Privacy by design</p>
-          <h2>Your energy data stays between you and Octopus.</h2>
+          <h2>Your API key stays out of the conversation.</h2>
         </div>
         <ul>
           <li><span>✓</span> Runs as a local process—no public server</li>
           <li><span>✓</span> Sends credentials only to Octopus Energy</li>
-          <li><span>✓</span> No third-party analytics or telemetry</li>
+          <li><span>i</span> Sends energy results to your selected AI client and model</li>
+          <li><span>i</span> Your AI provider’s privacy and data controls apply to those results</li>
           <li><span>✓</span> Remote energy tools are read-only</li>
         </ul>
       </section>

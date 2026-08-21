@@ -33,10 +33,14 @@ test("server-renders the complete beginner installation guide", async () => {
   assert.match(html, /Save the details locally/);
   assert.match(html, /Connect ChatGPT desktop or Codex/);
   assert.match(html, /Check that it works/);
+  assert.match(html, /Sends energy results to your selected AI client and model/);
+  assert.match(html, /AI provider.s privacy and data controls apply to those results/);
   assert.match(html, /application\/ld\+json/);
   assert.match(html, /HowTo/);
   assert.match(html, /FAQPage/);
   assert.match(html, /rel="canonical"[^>]+octopus-energy-private-mcp-guide\.darren138956\.chatgpt\.site/i);
+  assert.doesNotMatch(html, /Your energy data stays between you and Octopus/);
+  assert.doesNotMatch(html, /No cloud middleman/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|SkeletonPreview/);
 });
 
