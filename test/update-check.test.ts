@@ -114,6 +114,39 @@ describe("startup update check", () => {
       reason: "request_failed"
     });
   });
+
+  it("stops reading a chunked response as soon as the response limit is exceeded", async () => {
+    const chunk = new Uint8Array(64 * 1024);
+    let pullCount = 0;
+    let streamCancelled = false;
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      requestSignal = init?.signal;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(streamController) {
+          pullCount += 1;
+          streamController.enqueue(chunk);
+          if (pullCount === 20) streamController.close();
+        },
+        cancel() {
+          streamCancelled = true;
+        }
+      }), { status: 200 });
+    });
+
+    await expect(checkForUpdates({
+      enabled: true,
+      currentVersion: "0.2.0",
+      fetch: fetchMock
+    })).resolves.toEqual({
+      status: "unavailable",
+      current_version: "0.2.0",
+      reason: "invalid_response"
+    });
+    expect(pullCount).toBeLessThan(20);
+    expect(streamCancelled).toBe(true);
+    expect(requestSignal?.aborted).toBe(true);
+  });
 });
 
 describe("semantic version comparison", () => {
