@@ -6,18 +6,40 @@ import { testConfig } from "./helpers.js";
 
 describe("MCP server", () => {
   it("negotiates MCP, advertises its tools, and runs a local status tool", async () => {
-    const server = createServer(testConfig({ apiKey: undefined, accountNumber: undefined }));
+    const server = createServer(testConfig({ apiKey: undefined, accountNumber: undefined }), {
+      updateStatus: {
+        status: "update_available",
+        current_version: "0.2.0",
+        latest_version: "0.3.0",
+        checked_at: "2026-08-21T00:00:00.000Z",
+        message: "A newer Octopus Energy Private MCP version is available: 0.3.0 (installed: 0.2.0).",
+        instructions: {
+          git: "Git install: run `git pull --ff-only`, `npm ci`, and `npm run build`, then restart.",
+          zip: "ZIP install: keep `.env`, download the latest ZIP, rebuild, update the MCP path, then restart.",
+          full_guide: "https://github.com/soothill/octopus-energy-private-mcp/blob/main/docs/INSTALLATION.md#updating-later"
+        }
+      }
+    });
     const client = new Client({ name: "test-client", version: "1.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     await client.connect(clientTransport);
     try {
+      expect(client.getInstructions()).toContain("Tell the user about this update");
+      expect(client.getInstructions()).toContain("0.3.0 (installed: 0.2.0)");
       const listing = await client.listTools();
       expect(listing.tools.length).toBeGreaterThanOrEqual(21);
       expect(listing.tools.map((tool) => tool.name)).toContain("octopus_compare_tariffs");
       const response = await client.callTool({ name: "octopus_connection_status", arguments: {} });
       expect(response.isError).not.toBe(true);
-      expect(response.structuredContent).toMatchObject({ ready_for_account_queries: false });
+      expect(response.structuredContent).toMatchObject({
+        ready_for_account_queries: false,
+        update: {
+          status: "update_available",
+          current_version: "0.2.0",
+          latest_version: "0.3.0"
+        }
+      });
     } finally {
       await client.close();
       await server.close();

@@ -7,7 +7,8 @@ const transport = new StdioClientTransport({
   cwd: process.cwd(),
   env: {
     PATH: process.env.PATH ?? "",
-    OCTOPUS_CACHE_ENABLED: "false"
+    OCTOPUS_CACHE_ENABLED: "false",
+    OCTOPUS_UPDATE_CHECK_ENABLED: process.env.OCTOPUS_UPDATE_CHECK_ENABLED ?? "false"
   },
   stderr: "pipe"
 });

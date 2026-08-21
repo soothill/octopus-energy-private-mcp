@@ -24,9 +24,9 @@ This implementation was built because the available projects did not combine all
 ## Privacy and safety by design
 
 - Runs as a local stdio process; it does not listen on a network port.
-- Hard-codes `https://api.octopus.energy` as its only production outbound origin and disables automatic HTTP redirects.
+- Restricts authenticated energy requests to `https://api.octopus.energy` and disables automatic HTTP redirects.
 - Sends the API key only to Octopus: REST uses Basic authentication; GraphQL exchanges it for a short-lived token held only in memory.
-- Has no telemetry, analytics service or third-party network dependency at runtime.
+- Has no telemetry or analytics service. A separate anonymous startup check reads the public package version from `api.github.com`, sends no Octopus credentials or energy data, rejects redirects, times out after two seconds, and can be disabled.
 - Stores repeatable responses only in a local cache with hashed filenames, a private directory and private files.
 - Omits addresses from the account tool unless `include_addresses=true` is explicitly supplied.
 - Exposes only named, read-only Octopus operations. There is no arbitrary URL or arbitrary GraphQL tool.
@@ -52,7 +52,7 @@ npm run build
 npm start
 ```
 
-The process waits for MCP messages on stdin, so a quiet-looking terminal is expected. It never prints protocol data or secrets to ordinary logs.
+The process waits for MCP messages on stdin, so a quiet-looking terminal is expected. It never prints protocol data or secrets to ordinary logs. If a newer version is available, it prints a safe update notice and supplies the same instructions to the connected MCP client.
 
 Your API key is available in the Octopus account dashboard under Personal details → Developer settings. Public product and tariff tools work without a key; account and consumption tools need both variables.
 
@@ -170,6 +170,7 @@ Two-register electricity tariffs expose separate day and night feeds through the
 | `OCTOPUS_SMART_FLEX_DEVICE_ID` | — | Optional planned-dispatch device |
 | `OCTOPUS_CACHE_ENABLED` | `true` | Enable local response cache |
 | `OCTOPUS_CACHE_DIR` | platform user cache | Override private cache path |
+| `OCTOPUS_UPDATE_CHECK_ENABLED` | `true` | Check the public GitHub `main` version at startup |
 | `OCTOPUS_REQUESTS_PER_MINUTE` | `30` | Conservative local rolling cap, 1–120 |
 | `OCTOPUS_MIN_REQUEST_INTERVAL_MS` | `1000` | Minimum spacing between API attempts |
 | `OCTOPUS_REQUEST_TIMEOUT_MS` | `20000` | Per-attempt timeout |
@@ -185,6 +186,14 @@ Two-register electricity tariffs expose separate day and night feeds through the
 The implementation follows Octopus’s [REST endpoint guide](https://docs.octopus.energy/rest/guides/endpoints/) for account discovery, products, half-hourly consumption, pagination, timezones, gas units and prices. Smart-device features use named queries from the official [GraphQL documentation](https://developer.octopus.energy/graphql/).
 
 Octopus does not publish one simple REST request-per-minute limit in the REST guide, so the server uses a deliberately conservative configurable local cap. GraphQL has a points-based allowance and field-specific limits; `octopus_get_api_rate_limits` reports both the live Octopus status and local queue. Reducing local limits is safe. Increasing them can cause longer Octopus throttles and is capped by configuration validation.
+
+## Automatic version check
+
+At startup, the MCP anonymously reads `package.json` from this repository’s public `main` branch and compares its semantic version with the installed version. The request goes only to `api.github.com`, includes the installed version in a generic user-agent, and never includes an Octopus API key, account number, energy result, cache entry or other private value. Redirects are rejected and the check is abandoned after two seconds, so a GitHub or network failure never prevents the MCP from starting.
+
+When a newer version exists, the MCP adds a prominent notice to its startup instructions, writes the same secret-free notice to the local error/log channel, and reports it through `octopus_connection_status`. The notice includes separate Git and ZIP update steps plus a link to the [beginner update guide](docs/INSTALLATION.md#updating-later).
+
+Set `OCTOPUS_UPDATE_CHECK_ENABLED=false` in `.env` to disable all startup contact with GitHub. Future releases must update the version in `package.json` for the comparison to detect them.
 
 ## Development
 

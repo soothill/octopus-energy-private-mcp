@@ -17,9 +17,15 @@ McpServer tools/resources/prompts
     api.octopus.energy
       ├── /v1/... REST
       └── /v1/graphql/ named read queries
+
+Startup only
+  │ anonymous version manifest; two-second timeout; no redirects
+  ▼
+api.github.com
+  └── public main/package.json
 ```
 
-No component listens on a TCP port. The production clients reject any URL whose protocol/origin is not exactly `https://api.octopus.energy`, including pagination links returned by the API, and do not follow HTTP redirects automatically.
+No component listens on a TCP port. The authenticated energy clients reject any URL whose protocol/origin is not exactly `https://api.octopus.energy`, including pagination links returned by the API, and do not follow HTTP redirects automatically. The independent startup update checker can make one unauthenticated request to the fixed `api.github.com` manifest URL. It sends no Octopus data, rejects redirects, bounds the response and cannot prevent startup if it fails.
 
 ## Modules
 
@@ -30,6 +36,8 @@ No component listens on a TCP port. The production clients reject any URL whose 
 - `graphql-client.ts`: in-memory token lifecycle and a fixed set of read-only operations.
 - `periods.ts`: DST-aware named/custom periods in the configured timezone.
 - `analytics.ts`: unit handling, data quality, usage profiles, comparison, cheapest windows and tariff cost replay.
+- `update-check.ts`: bounded, failure-safe semantic-version check against the public GitHub `main` manifest.
+- `version.ts`: installed version sourced from the package manifest.
 - `server.ts`: MCP schemas, annotations, resources, prompts and privacy-safe error responses.
 
 ## Caching policy
