@@ -112,6 +112,45 @@ function unavailable(currentVersion: string, reason: UpdateStatus["reason"]): Up
   return { status: "unavailable", current_version: currentVersion, reason };
 }
 
+async function readBoundedResponse(
+  response: Response,
+  maxBytes: number,
+  controller: AbortController
+): Promise<string | null> {
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        controller.abort();
+        try {
+          await reader.cancel("response_too_large");
+        } catch {
+          // Aborting the request may already have errored or cancelled the stream.
+        }
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
 export async function checkForUpdates(options: CheckOptions): Promise<UpdateStatus> {
   if (!options.enabled) {
     return {
@@ -141,8 +180,8 @@ export async function checkForUpdates(options: CheckOptions): Promise<UpdateStat
     if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
       return unavailable(options.currentVersion, "invalid_response");
     }
-    const raw = await response.text();
-    if (Buffer.byteLength(raw) > MAX_RESPONSE_BYTES) {
+    const raw = await readBoundedResponse(response, MAX_RESPONSE_BYTES, controller);
+    if (raw === null) {
       return unavailable(options.currentVersion, "invalid_response");
     }
 
