@@ -29,7 +29,7 @@ const howToData = {
   ],
   step: [
     { "@type": "HowToStep", name: "Install Node.js", text: "Install Node.js LTS version 22 or newer." },
-    { "@type": "HowToStep", name: "Download the MCP", text: "Download and unpack the repository ZIP." },
+    { "@type": "HowToStep", name: "Download the MCP", text: "Download and unpack the whole repository folder, then move it to any permanent location you will keep." },
     { "@type": "HowToStep", name: "Prepare the MCP", text: "Install its components and build the local server." },
     { "@type": "HowToStep", name: "Get Octopus details", text: "Copy your API key and account number from Developer settings." },
     { "@type": "HowToStep", name: "Save credentials locally", text: "Put the two values in the local .env file." },
@@ -55,6 +55,22 @@ const faqData = {
       "@type": "Question",
       name: "Can I use this in ChatGPT on the web?",
       acceptedAnswer: { "@type": "Answer", text: "No. This local STDIO MCP must run in ChatGPT desktop or another local Codex client." },
+    },
+    {
+      "@type": "Question",
+      name: "Which Documents folder should I use?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "Use your personal Documents folder, or any other permanent folder you will keep. Documents is only a suggestion and is not a special MCP location.",
+      },
+    },
+    {
+      "@type": "Question",
+      name: "How do ChatGPT desktop and Codex find the MCP?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "They do not search your Documents folder. The setup helper prints the exact absolute paths for your computer, which are saved in the local MCP configuration.",
+      },
     },
   ],
 };
@@ -210,9 +226,15 @@ export default function Home() {
               </a>
               <ol className="plain-steps">
                 <li>Open the downloaded ZIP file to unpack it.</li>
-                <li>Move <code>octopus-energy-private-mcp-main</code> into your Documents folder.</li>
-                <li>Keep it there. Moving it later will break the saved connection until you update its path.</li>
+                <li>Move the <strong>whole unpacked folder</strong> named <code>octopus-energy-private-mcp-main</code> somewhere permanent. Your personal Documents folder is an easy choice, but it is not required.</li>
+                <li>Keep the folder in that location. ChatGPT and Codex will later save its exact path, so moving or renaming it will break the connection until you update the saved paths.</li>
               </ol>
+              <div className="platform-grid compact">
+                <div><span>Mac</span><p>In Finder, choose <strong>Documents</strong> in the sidebar. Its path is normally <code>/Users/your-name/Documents</code>.</p></div>
+                <div><span>Windows</span><p>In File Explorer, choose <strong>Documents</strong>. It may be inside your user folder or OneDrive.</p></div>
+                <div><span>Linux</span><p>Choose <strong>Documents</strong> in your file manager, or use any permanent folder inside your Home folder.</p></div>
+              </div>
+              <p className="small-note"><strong>Documents is not a special MCP folder.</strong> It is simply a familiar place that is unlikely to be deleted accidentally.</p>
               <p className="small-note">Prefer Git? You can instead run <code>git clone {repositoryUrl}.git</code>, but the ZIP route is simpler.</p>
             </article>
 
@@ -225,7 +247,7 @@ export default function Home() {
               <div className="platform-stack">
                 <details open>
                   <summary><span>Mac</span> The drag-and-drop way</summary>
-                  <p>Open Terminal. Type <code>cd</code> followed by one space. Drag the MCP folder from Finder into Terminal, then press Return.</p>
+                  <p>Open Terminal. Type <code>cd</code> followed by one space. Drag the MCP folder from Finder into Terminal, then press Return. This does <strong>not</strong> move the folder—it inserts its full current path for you.</p>
                 </details>
                 <details>
                   <summary><span>Windows</span> Open PowerShell in the folder</summary>
@@ -297,7 +319,7 @@ export default function Home() {
                 <span className="step-number">6</span>
                 <div><p>About 2 minutes</p><h3>Connect ChatGPT desktop or Codex</h3></div>
               </div>
-              <p className="step-lead">This helper prints the exact, secret-free connection details for your computer:</p>
+              <p className="step-lead">ChatGPT and Codex do not search your Documents folder. This helper finds the MCP where you placed it and prints the exact, secret-free connection details for your computer:</p>
               <Command>npm run setup:codex</Command>
               <ol className="app-steps">
                 <li><span>1</span><p>Open the <strong>ChatGPT desktop app</strong>, then open <strong>Settings → MCP servers</strong>.</p></li>
@@ -305,8 +327,9 @@ export default function Home() {
                 <li><span>3</span><p>Copy the printed <strong>Command</strong>, then add both printed <strong>Arguments</strong> in the same order.</p></li>
                 <li><span>4</span><p>Save the server and select <strong>Restart</strong> when prompted.</p></li>
               </ol>
+              <div className="tip-box"><strong>What the saved details do:</strong> the Command starts Node.js, while the two Arguments point to this folder’s private <code>.env</code> file and built <code>dist/index.js</code> server. If you move or rename the folder later, run <code>npm run setup:codex</code> again, replace the saved details, and restart the app.</div>
               <div className="official-note">
-                These steps follow the <a href="https://learn.chatgpt.com/docs/extend/mcp?surface=cli" rel="noreferrer">official OpenAI MCP setup guide ↗</a>. The desktop app, Codex CLI, and IDE extension share this local configuration.
+                These steps follow the <a href="https://learn.chatgpt.com/docs/extend/mcp?surface=cli" rel="noreferrer">official OpenAI MCP setup guide ↗</a>. The desktop app, Codex CLI, and IDE extension share this local configuration on the same computer. If you configure Codex directly, copy the printed <code>[mcp_servers.octopus_energy]</code> block into <code>~/.codex/config.toml</code>. A normal ChatGPT web-browser tab cannot start this local MCP.
               </div>
             </article>
           </div>
@@ -370,6 +393,14 @@ export default function Home() {
           <details>
             <summary>It works in Codex but not ChatGPT web <span>+</span></summary>
             <p>That is expected. This local MCP runs on your computer, so use the ChatGPT desktop app or another local Codex client rather than a normal browser tab.</p>
+          </details>
+          <details>
+            <summary>Which Documents folder should I use? <span>+</span></summary>
+            <p>Use the personal Documents folder shown in Finder, File Explorer, or your Linux file manager. Documents is only a suggested permanent location; the MCP can live in any folder you will keep.</p>
+          </details>
+          <details>
+            <summary>I moved or renamed the MCP folder <span>+</span></summary>
+            <p>Open Terminal or PowerShell in its new location, run <code>npm run setup:codex</code>, replace the saved Command and Arguments in your MCP settings, then restart ChatGPT desktop or Codex.</p>
           </details>
           <details>
             <summary>I see “a newer version is available” <span>+</span></summary>

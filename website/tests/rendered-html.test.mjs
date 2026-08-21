@@ -32,6 +32,11 @@ test("server-renders the complete beginner installation guide", async () => {
   assert.match(html, /Download the latest ZIP/);
   assert.match(html, /Save the details locally/);
   assert.match(html, /Connect ChatGPT desktop or Codex/);
+  assert.match(html, /Documents is not a special MCP folder/);
+  assert.match(html, /do not search your Documents folder/);
+  assert.match(html, /does <strong>not<\/strong> move the folder/i);
+  assert.match(html, /mcp_servers\.octopus_energy/);
+  assert.match(html, /I moved or renamed the MCP folder/);
   assert.match(html, /Check that it works/);
   assert.match(html, /Sends energy results to your selected AI client and model/);
   assert.match(html, /AI provider.s privacy and data controls apply to those results/);
