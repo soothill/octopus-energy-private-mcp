@@ -315,7 +315,10 @@ export class OctopusGraphQlClient {
       },
       15 * 60 * 1000
     );
-    return { ...result, costOfCharge: result.costOfCharge ?? [] };
+    if (!Array.isArray(result.costOfCharge)) {
+      throw new Error("Octopus returned no EV charge cost dataset for the requested account and dates");
+    }
+    return { ...result, costOfCharge: result.costOfCharge };
   }
 
   async getEvTariffPricing(accountOverride?: string): Promise<EvTariffPricingResponse> {

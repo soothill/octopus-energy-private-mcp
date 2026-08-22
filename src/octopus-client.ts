@@ -453,7 +453,8 @@ export function isDualRegisterTariff(tariffCode: string): boolean {
 
 export function isDeviceAwareEvTariff(tariffCode: string): boolean {
   const normalized = tariffCode.trim().toUpperCase();
-  return /(?:^|-)INTELLI-(?:VAR|FIX)(?:-|$)/.test(normalized) ||
+  return /(?:^|-)INTELLI-FIX(?:-|$)/.test(normalized) ||
+    /(?:^|-)IOG-SMB-FIX(?:-|$)/.test(normalized) ||
     /(?:^|-)INTELLIGENT-OCTOPUS(?:-GO)?(?:-|$)/.test(normalized) ||
     /(?:^|-)DRIVE-PACK(?:-|$)/.test(normalized) ||
     /(?:^|-)POWER-PACK(?:-|$)/.test(normalized);

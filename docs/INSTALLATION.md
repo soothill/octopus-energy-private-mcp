@@ -220,7 +220,7 @@ The MCP supplies data and estimates, not billing advice. Conventional cost calcu
 
 For the newer Intelligent Octopus Go four-rate model, ask for your **EV tariff pricing** to see separate home peak, home off-peak, EV peak and EV off-peak account rates. Ask for **EV charge costs** to see the consumption and cost that Octopus calculated for smart and non-smart charging over a period. The MCP uses these account-priced Octopus records because ordinary whole-home meter data cannot tell which energy went to the car, whether it was inside the six-hour smart-charge allowance, or whether Boost was used.
 
-Octopus returns this charge history by whole date. If you ask for a rolling period or use times as well as dates, the answer clearly shows the original period and the effective whole-day period sent to Octopus. If a returned record is missing a cost or consumption value, its total is shown as unavailable rather than adding up only the other records and making that partial amount look complete. A period with no EV charge records shows zero totals.
+Octopus returns this charge history by whole date. If you ask for a rolling period or use times as well as dates, the answer clearly shows the original period and the effective whole-day period sent to Octopus. If a returned record is missing a cost or consumption value, its total is shown as unavailable rather than adding up only the other records and making that partial amount look complete. A confirmed empty list shows zero totals; if Octopus returns no dataset at all, the MCP reports an error instead of guessing zero.
 
 Drive Pack and Power Pack are type-of-use arrangements. Their subscription fees, credits and other account-level adjustments may be recorded separately from individual EV charge costs, so always use the Octopus app and statement as the final total.
 
@@ -274,6 +274,8 @@ Ask:
 > Show my active four-rate EV tariff pricing, then show Octopus’s EV charge costs for last month.
 
 If no four-rate tariff appears, Octopus may not have enabled the new model on your account yet, or your account may use another tariff model. Check the Devices area in the Octopus app. EV charge records can also appear a day or so after charging rather than immediately.
+
+Older `INTELLI-VAR` Intelligent Octopus Go tariffs continue to use the conventional published REST rates. They are not forced into the new four-rate tools unless Octopus has actually moved the account to a newer tariff model.
 
 ### The tools work in Codex but not in ChatGPT web
 
