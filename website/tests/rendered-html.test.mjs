@@ -44,6 +44,7 @@ test("server-renders the complete beginner installation guide", async () => {
   assert.match(html, /effective whole dates used by Octopus/i);
   assert.match(html, /never presents a partial subtotal as complete/i);
   assert.match(html, /distinguishes a confirmed empty history from unavailable data/i);
+  assert.match(html, /shorter period or weekly\/monthly results/i);
   assert.match(html, /INTELLI-VAR/);
   assert.match(html, /does not rebuild these prices from whole-home meter readings/i);
   assert.match(html, /Sends energy results to your selected AI client and model/);

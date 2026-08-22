@@ -222,6 +222,8 @@ For the newer Intelligent Octopus Go four-rate model, ask for your **EV tariff p
 
 Octopus returns this charge history by whole date. If you ask for a rolling period or use times as well as dates, the answer clearly shows the original period and the effective whole-day period sent to Octopus. If a returned record is missing a cost or consumption value, its total is shown as unavailable rather than adding up only the other records and making that partial amount look complete. A confirmed empty list shows zero totals; if Octopus returns no dataset at all, the MCP reports an error instead of guessing zero.
 
+If a very long daily request exceeds the safety limit, ask for a shorter period or ask for weekly or monthly EV charge costs. The MCP rejects an oversized result instead of silently omitting records or calculating a partial total.
+
 Drive Pack and Power Pack are type-of-use arrangements. Their subscription fees, credits and other account-level adjustments may be recorded separately from individual EV charge costs, so always use the Octopus app and statement as the final total.
 
 ## Troubleshooting

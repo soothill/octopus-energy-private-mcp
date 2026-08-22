@@ -189,18 +189,24 @@ export class OctopusGraphQlClient {
     operationName: string,
     query: string,
     variables: Record<string, unknown>,
-    ttlMs: number
+    ttlMs: number,
+    validate?: (data: T) => void
   ): Promise<T & CacheProvenance> {
     const key = `graphql:${operationName}:${createHash("sha256").update(JSON.stringify(variables)).digest("hex")}`;
     const cached = await this.cache.get<T>(key);
-    if (cached) return this.withCacheProvenance(cached.value, "hit", cached.ageMs);
+    if (cached) {
+      validate?.(cached.value);
+      return this.withCacheProvenance(cached.value, "hit", cached.ageMs);
+    }
     const stale = await this.cache.get<T>(key, true);
     try {
       const data = await this.rawRequest<T>(query, variables, await this.accessToken());
+      validate?.(data);
       await this.cache.set(key, "graphql", data, ttlMs);
       return this.withCacheProvenance(data, this.cache.enabled ? "miss" : "disabled");
     } catch (error) {
       if (stale && error instanceof TransientGraphQlError) {
+        validate?.(stale.value);
         return this.withCacheProvenance(stale.value, "stale", stale.ageMs);
       }
       throw error;
@@ -284,6 +290,18 @@ export class OctopusGraphQlClient {
     startDate: string;
     reportDate: string;
   }): Promise<EvChargeCostsResponse> {
+    const assertValid: (
+      data: EvChargeCostsQuery
+    ) => asserts data is EvChargeCostsQuery & { costOfCharge: EvChargeCostRecord[] } = (data) => {
+      if (!Array.isArray(data.costOfCharge)) {
+        throw new Error("Octopus returned no EV charge cost dataset for the requested account and dates");
+      }
+      if (data.costOfCharge.length > this.config.maxRecordsPerCall) {
+        throw new Error(
+          `Octopus returned ${data.costOfCharge.length} EV charge records, exceeding OCTOPUS_MAX_RECORDS_PER_CALL=${this.config.maxRecordsPerCall}; request a shorter period or a coarser frequency`
+        );
+      }
+    };
     const query = `
       query EvChargeCosts(
         $accountNumber: String!, $frequency: DataFrequency!, $startDate: Date, $reportDate: Date
@@ -313,11 +331,10 @@ export class OctopusGraphQlClient {
         startDate: input.startDate,
         reportDate: input.reportDate
       },
-      15 * 60 * 1000
+      15 * 60 * 1000,
+      assertValid
     );
-    if (!Array.isArray(result.costOfCharge)) {
-      throw new Error("Octopus returned no EV charge cost dataset for the requested account and dates");
-    }
+    assertValid(result);
     return { ...result, costOfCharge: result.costOfCharge };
   }
 

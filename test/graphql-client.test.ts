@@ -63,9 +63,33 @@ describe("Octopus GraphQL client", () => {
           }
         });
       }
-      return Response.json({ data: { costOfCharge: null } });
+      if (calls === 3) return Response.json({ data: { costOfCharge: null } });
+      return Response.json({
+        data: {
+          costOfCharge: [
+            {
+              costOfChargeId: "charge-2",
+              isSmartCharge: true,
+              krakenflexDeviceId: "flex-1",
+              reportDate: "2026-08-06",
+              totalConsumption: 1,
+              totalCostExclTax: 8,
+              totalCostInclTax: 8.4
+            },
+            {
+              costOfChargeId: "charge-3",
+              isSmartCharge: true,
+              krakenflexDeviceId: "flex-1",
+              reportDate: "2026-08-07",
+              totalConsumption: 1,
+              totalCostExclTax: 8,
+              totalCostInclTax: 8.4
+            }
+          ]
+        }
+      });
     });
-    const config = testConfig();
+    const config = testConfig({ maxRecordsPerCall: 1 });
     const client = new OctopusGraphQlClient(
       config,
       new FileCache(config.cacheDir, false),
@@ -102,6 +126,12 @@ describe("Octopus GraphQL client", () => {
       startDate: "2026-08-04",
       reportDate: "2026-08-05"
     })).rejects.toThrow("Octopus returned no EV charge cost dataset");
+    await expect(client.getEvChargeCosts({
+      accountNumber: "a-ev1234",
+      frequency: "DAILY",
+      startDate: "2026-08-06",
+      reportDate: "2026-08-07"
+    })).rejects.toThrow("exceeding OCTOPUS_MAX_RECORDS_PER_CALL=1");
   });
 
   it("returns active four-rate EV tariff prices with separate home and device rates", async () => {

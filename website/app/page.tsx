@@ -377,7 +377,7 @@ export default function Home() {
           <blockquote>“Compare this month with the previous equivalent period.”</blockquote>
           <blockquote>“How many Octoplus points do I have?”</blockquote>
         </div>
-        <p className="cost-note">Conventional tariff replays are estimates, not bills or quotes. For the new Intelligent Octopus Go model, the MCP reads separate home and EV rates plus Octopus-priced EV charge records instead of guessing from whole-home data. It shows the effective whole dates used by Octopus, marks totals incomplete when a record is missing a value, and distinguishes a confirmed empty history from unavailable data. Older `INTELLI-VAR` tariffs keep their conventional rate support. Subscriptions, credits and other statement adjustments may still be separate.</p>
+        <p className="cost-note">Conventional tariff replays are estimates, not bills or quotes. For the new Intelligent Octopus Go model, the MCP reads separate home and EV rates plus Octopus-priced EV charge records instead of guessing from whole-home data. It shows the effective whole dates used by Octopus, marks totals incomplete when a record is missing a value, and distinguishes a confirmed empty history from unavailable data. If a very long request exceeds the safety limit, ask for a shorter period or weekly/monthly results. Older `INTELLI-VAR` tariffs keep their conventional rate support. Subscriptions, credits and other statement adjustments may still be separate.</p>
       </section>
 
       <section className="help-section" id="help">
