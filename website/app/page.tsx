@@ -77,7 +77,7 @@ const faqData = {
       name: "Does it support the new Intelligent Octopus Go four-rate pricing?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "Yes. It reads the active home peak, home off-peak, EV peak and EV off-peak rates from the authenticated Octopus account, and can retrieve Octopus-calculated smart and non-smart EV charge costs. It reports the effective whole dates used by Octopus and never presents a partial subtotal as complete.",
+        text: "Yes. It reads the active home peak, home off-peak, EV peak and EV off-peak rates from the authenticated Octopus account, and can retrieve Octopus-calculated smart and non-smart EV charge costs. It reports the effective whole dates used by Octopus, never presents a partial subtotal as complete, and returns zero for a complete period with no EV charge records.",
       },
     },
   ],
@@ -377,7 +377,7 @@ export default function Home() {
           <blockquote>“Compare this month with the previous equivalent period.”</blockquote>
           <blockquote>“How many Octoplus points do I have?”</blockquote>
         </div>
-        <p className="cost-note">Conventional tariff replays are estimates, not bills or quotes. For the new Intelligent Octopus Go model, the MCP reads separate home and EV rates plus Octopus-priced EV charge records instead of guessing from whole-home data. It shows the effective whole dates used by Octopus and marks totals incomplete when a record is missing a value. Subscriptions, credits and other statement adjustments may still be separate.</p>
+        <p className="cost-note">Conventional tariff replays are estimates, not bills or quotes. For the new Intelligent Octopus Go model, the MCP reads separate home and EV rates plus Octopus-priced EV charge records instead of guessing from whole-home data. It shows the effective whole dates used by Octopus, marks totals incomplete when a record is missing a value, and returns zero when a complete period has no EV charge records. Subscriptions, credits and other statement adjustments may still be separate.</p>
       </section>
 
       <section className="help-section" id="help">

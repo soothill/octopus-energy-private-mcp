@@ -149,10 +149,7 @@ function assertPublishedRateViewSupported(tariffCode: string): void {
 }
 
 function finiteTotal(values: Array<number | null>): number | null {
-  if (
-    values.length === 0 ||
-    values.some((value) => typeof value !== "number" || !Number.isFinite(value))
-  ) {
+  if (values.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
     return null;
   }
   return (values as number[]).reduce((total, value) => total + value, 0);

@@ -245,7 +245,7 @@ describe("MCP server", () => {
     }
   });
 
-  it("reports whole-day EV charge boundaries and withholds incomplete aggregates", async () => {
+  it("reports whole-day EV charge boundaries and distinguishes incomplete from empty aggregates", async () => {
     const getEvChargeCosts = vi.fn(async () => ({
       costOfCharge: [
         {
@@ -308,6 +308,35 @@ describe("MCP server", () => {
         frequency: "DAILY",
         startDate: "2026-08-01",
         reportDate: "2026-08-03"
+      });
+
+      getEvChargeCosts.mockResolvedValueOnce({
+        costOfCharge: [],
+        cache_status: "miss" as const,
+        stale_cache_used: false
+      });
+      const emptyResponse = await client.callTool({
+        name: "octopus_get_ev_charge_costs",
+        arguments: {
+          period_from: "2026-08-04",
+          period_to: "2026-08-04"
+        }
+      });
+      expect(emptyResponse.isError).not.toBe(true);
+      expect(emptyResponse.structuredContent).toMatchObject({
+        requested_period_adjusted: false,
+        summary: {
+          records: 0,
+          total_consumption_kwh: 0,
+          total_cost_excl_tax_pence: 0,
+          total_cost_incl_tax_pence: 0,
+          total_cost_incl_tax_gbp: 0,
+          totals_complete: {
+            consumption: true,
+            cost_excl_tax: true,
+            cost_incl_tax: true
+          }
+        }
       });
     } finally {
       await client.close();

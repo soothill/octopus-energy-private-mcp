@@ -220,7 +220,7 @@ The MCP supplies data and estimates, not billing advice. Conventional cost calcu
 
 For the newer Intelligent Octopus Go four-rate model, ask for your **EV tariff pricing** to see separate home peak, home off-peak, EV peak and EV off-peak account rates. Ask for **EV charge costs** to see the consumption and cost that Octopus calculated for smart and non-smart charging over a period. The MCP uses these account-priced Octopus records because ordinary whole-home meter data cannot tell which energy went to the car, whether it was inside the six-hour smart-charge allowance, or whether Boost was used.
 
-Octopus returns this charge history by whole date. If you ask for a rolling period or use times as well as dates, the answer clearly shows the original period and the effective whole-day period sent to Octopus. If a returned record is missing a cost or consumption value, its total is shown as unavailable rather than adding up only the other records and making that partial amount look complete.
+Octopus returns this charge history by whole date. If you ask for a rolling period or use times as well as dates, the answer clearly shows the original period and the effective whole-day period sent to Octopus. If a returned record is missing a cost or consumption value, its total is shown as unavailable rather than adding up only the other records and making that partial amount look complete. A period with no EV charge records shows zero totals.
 
 Drive Pack and Power Pack are type-of-use arrangements. Their subscription fees, credits and other account-level adjustments may be recorded separately from individual EV charge costs, so always use the Octopus app and statement as the final total.
 
