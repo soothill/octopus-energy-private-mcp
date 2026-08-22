@@ -41,6 +41,8 @@ test("server-renders the complete beginner installation guide", async () => {
   assert.match(html, /Show my four Intelligent Octopus Go rates/);
   assert.match(html, /Does it understand the new Intelligent Octopus Go prices/);
   assert.match(html, /separate home peak, home off-peak, EV peak and EV off-peak rates/i);
+  assert.match(html, /effective whole dates used by Octopus/i);
+  assert.match(html, /never presents a partial subtotal as complete/i);
   assert.match(html, /does not rebuild these prices from whole-home meter readings/i);
   assert.match(html, /Sends energy results to your selected AI client and model/);
   assert.match(html, /AI provider.s privacy and data controls apply to those results/);

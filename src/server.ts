@@ -149,9 +149,13 @@ function assertPublishedRateViewSupported(tariffCode: string): void {
 }
 
 function finiteTotal(values: Array<number | null>): number | null {
-  const finite = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  if (finite.length === 0) return null;
-  return finite.reduce((total, value) => total + value, 0);
+  if (
+    values.length === 0 ||
+    values.some((value) => typeof value !== "number" || !Number.isFinite(value))
+  ) {
+    return null;
+  }
+  return (values as number[]).reduce((total, value) => total + value, 0);
 }
 
 function summarizeEvChargeCosts(records: EvChargeCostRecord[]) {
@@ -166,7 +170,12 @@ function summarizeEvChargeCosts(records: EvChargeCostRecord[]) {
     total_consumption_kwh: consumption === null ? null : Number(consumption.toFixed(3)),
     total_cost_excl_tax_pence: costExclTax === null ? null : Number(costExclTax.toFixed(3)),
     total_cost_incl_tax_pence: costInclTax === null ? null : Number(costInclTax.toFixed(3)),
-    total_cost_incl_tax_gbp: costInclTax === null ? null : Number((costInclTax / 100).toFixed(2))
+    total_cost_incl_tax_gbp: costInclTax === null ? null : Number((costInclTax / 100).toFixed(2)),
+    totals_complete: {
+      consumption: consumption !== null,
+      cost_excl_tax: costExclTax !== null,
+      cost_incl_tax: costInclTax !== null
+    }
   };
 }
 
@@ -178,7 +187,20 @@ function evChargeDateRange(range: PeriodRange, timezone: string) {
   if (!start.isValid || !inclusiveEnd.isValid || !startDate || !reportDate) {
     throw new Error("Could not convert the requested period into Octopus EV charge dates");
   }
-  return { start_date: startDate, report_date: reportDate };
+  const effectiveFrom = start.startOf("day");
+  const effectiveTo = inclusiveEnd.plus({ days: 1 }).startOf("day");
+  return {
+    start_date: startDate,
+    report_date: reportDate,
+    effective_period: {
+      from: effectiveFrom.toUTC().toISO()!,
+      to: effectiveTo.toUTC().toISO()!,
+      label: `${startDate} to ${reportDate} (whole Octopus dates)`
+    },
+    requested_period_adjusted:
+      effectiveFrom.toMillis() !== start.toMillis() ||
+      effectiveTo.toMillis() !== DateTime.fromISO(range.to, { setZone: true }).setZone(timezone).toMillis()
+  };
 }
 
 function redactAccountAddresses(value: unknown): unknown {
@@ -847,7 +869,12 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       });
       return {
         requested_period: range,
-        octopus_date_range: dates,
+        octopus_date_range: {
+          start_date: dates.start_date,
+          report_date: dates.report_date
+        },
+        effective_period: dates.effective_period,
+        requested_period_adjusted: dates.requested_period_adjusted,
         frequency: args.frequency,
         pricing_source: "Octopus Energy account costOfCharge",
         pricing_model: "device_aware_ev_charging",
@@ -856,6 +883,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
         cache: cacheProvenance(data),
         caveats: [
           "These are Octopus-calculated EV charge costs, not a reconstruction from aggregate smart-meter consumption.",
+          ...(dates.requested_period_adjusted
+            ? ["Octopus costOfCharge accepts whole dates. The requested sub-day boundaries were expanded to the effective whole-day period shown above."]
+            : []),
+          "A null aggregate means at least one returned record did not contain that value; the MCP never presents a partial subtotal as a complete total.",
           "Intelligent Octopus Go can price the home and EV differently in the same half-hour and limits the off-peak smart-charge allowance to six actual charging hours per midday-to-midday day.",
           "Intelligent Drive Pack and Power Pack are type-of-use arrangements. Subscription fees, credits, exports, or other account-level adjustments may appear separately from these charge records; use the Octopus statement as the definitive total."
         ]

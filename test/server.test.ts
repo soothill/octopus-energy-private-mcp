@@ -245,6 +245,76 @@ describe("MCP server", () => {
     }
   });
 
+  it("reports whole-day EV charge boundaries and withholds incomplete aggregates", async () => {
+    const getEvChargeCosts = vi.fn(async () => ({
+      costOfCharge: [
+        {
+          costOfChargeId: "complete-1",
+          isSmartCharge: true,
+          krakenflexDeviceId: "flex-1",
+          reportDate: "2026-08-01",
+          totalConsumption: 7.25,
+          totalCostExclTax: 57.14,
+          totalCostInclTax: 60
+        },
+        {
+          costOfChargeId: "incomplete-1",
+          isSmartCharge: false,
+          krakenflexDeviceId: "flex-1",
+          reportDate: "2026-08-02",
+          totalConsumption: 1.25,
+          totalCostExclTax: null,
+          totalCostInclTax: null
+        }
+      ],
+      cache_status: "miss" as const,
+      stale_cache_used: false
+    }));
+    const graphql = { getEvChargeCosts } as unknown as OctopusGraphQlClient;
+    const server = createServer(testConfig(), { graphql });
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const response = await client.callTool({
+        name: "octopus_get_ev_charge_costs",
+        arguments: {
+          period_from: "2026-08-01T12:00:00+01:00",
+          period_to: "2026-08-03T12:00:00+01:00"
+        }
+      });
+      expect(response.isError).not.toBe(true);
+      expect(response.structuredContent).toMatchObject({
+        octopus_date_range: { start_date: "2026-08-01", report_date: "2026-08-03" },
+        effective_period: {
+          from: "2026-07-31T23:00:00.000Z",
+          to: "2026-08-03T23:00:00.000Z"
+        },
+        requested_period_adjusted: true,
+        summary: {
+          total_consumption_kwh: 8.5,
+          total_cost_excl_tax_pence: null,
+          total_cost_incl_tax_pence: null,
+          total_cost_incl_tax_gbp: null,
+          totals_complete: {
+            consumption: true,
+            cost_excl_tax: false,
+            cost_incl_tax: false
+          }
+        }
+      });
+      expect(getEvChargeCosts).toHaveBeenCalledWith({
+        frequency: "DAILY",
+        startDate: "2026-08-01",
+        reportDate: "2026-08-03"
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("refuses to rank export payments as import costs", async () => {
     const getTariffRates = vi.fn();
     const rest = {

@@ -77,7 +77,7 @@ const faqData = {
       name: "Does it support the new Intelligent Octopus Go four-rate pricing?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "Yes. It reads the active home peak, home off-peak, EV peak and EV off-peak rates from the authenticated Octopus account, and can retrieve Octopus-calculated smart and non-smart EV charge costs. It does not guess from whole-home meter data.",
+        text: "Yes. It reads the active home peak, home off-peak, EV peak and EV off-peak rates from the authenticated Octopus account, and can retrieve Octopus-calculated smart and non-smart EV charge costs. It reports the effective whole dates used by Octopus and never presents a partial subtotal as complete.",
       },
     },
   ],
@@ -377,7 +377,7 @@ export default function Home() {
           <blockquote>“Compare this month with the previous equivalent period.”</blockquote>
           <blockquote>“How many Octoplus points do I have?”</blockquote>
         </div>
-        <p className="cost-note">Conventional tariff replays are estimates, not bills or quotes. For the new Intelligent Octopus Go model, the MCP reads separate home and EV rates plus Octopus-priced EV charge records instead of guessing from whole-home data. Subscriptions, credits and other statement adjustments may still be separate.</p>
+        <p className="cost-note">Conventional tariff replays are estimates, not bills or quotes. For the new Intelligent Octopus Go model, the MCP reads separate home and EV rates plus Octopus-priced EV charge records instead of guessing from whole-home data. It shows the effective whole dates used by Octopus and marks totals incomplete when a record is missing a value. Subscriptions, credits and other statement adjustments may still be separate.</p>
       </section>
 
       <section className="help-section" id="help">
@@ -419,7 +419,7 @@ export default function Home() {
           </details>
           <details>
             <summary>Does it understand the new Intelligent Octopus Go prices? <span>+</span></summary>
-            <p>Yes. Ask it to show your active four-rate EV pricing to see separate home peak, home off-peak, EV peak and EV off-peak rates. You can also ask for Octopus’s EV charge costs over a period, split between smart and non-smart charging.</p>
+            <p>Yes. Ask it to show your active four-rate EV pricing to see separate home peak, home off-peak, EV peak and EV off-peak rates. You can also ask for Octopus’s EV charge costs over a period, split between smart and non-smart charging. Because Octopus provides this history by whole date, the MCP shows the effective dates it used and never presents a partial subtotal as complete.</p>
             <p>The MCP does not rebuild these prices from whole-home meter readings because the home and car can have different rates in the same half-hour. If no four-rate tariff appears, the change may not have reached your account yet. The Octopus app and statement remain definitive.</p>
           </details>
           <details>
