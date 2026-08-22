@@ -3,11 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { FileCache } from "../src/cache.js";
-import { OctopusRestClient } from "../src/octopus-client.js";
+import { isDeviceAwareEvTariff, OctopusRestClient } from "../src/octopus-client.js";
 import { RequestRateLimiter } from "../src/rate-limiter.js";
 import { testConfig } from "./helpers.js";
 
 describe("Octopus REST client", () => {
+  it("identifies tariff codes whose EV billing cannot be replayed from aggregate readings", () => {
+    expect(isDeviceAwareEvTariff("E-1R-INTELLI-FIX-12M-26-08-01-A")).toBe(true);
+    expect(isDeviceAwareEvTariff("E-1R-DRIVE-PACK-25-01-01-A")).toBe(true);
+    expect(isDeviceAwareEvTariff("E-1R-POWER-PACK-25-01-01-A")).toBe(true);
+    expect(isDeviceAwareEvTariff("E-1R-AGILE-24-10-01-A")).toBe(false);
+    expect(isDeviceAwareEvTariff("E-1R-INTELLI-FLUX-IMPORT-23-07-14-A")).toBe(false);
+  });
+
   it("authenticates only to the allowlisted origin and discovers meters", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       expect(new URL(input.toString()).origin).toBe("https://api.octopus.energy");

@@ -72,6 +72,14 @@ const faqData = {
         text: "They do not search your Documents folder. The setup helper prints the exact absolute paths for your computer, which are saved in the local MCP configuration.",
       },
     },
+    {
+      "@type": "Question",
+      name: "Does it support the new Intelligent Octopus Go four-rate pricing?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "Yes. It reads the active home peak, home off-peak, EV peak and EV off-peak rates from the authenticated Octopus account, and can retrieve Octopus-calculated smart and non-smart EV charge costs. It does not guess from whole-home meter data.",
+      },
+    },
   ],
 };
 
@@ -364,10 +372,12 @@ export default function Home() {
         <div className="idea-grid">
           <blockquote>“Analyse my electricity usage over the last 30 days and point out the busiest times.”</blockquote>
           <blockquote className="accent">“Find the cheapest two-hour windows on my Agile tariff tomorrow.”</blockquote>
+          <blockquote>“Show my four Intelligent Octopus Go rates and explain which applies to my home and car.”</blockquote>
+          <blockquote className="accent">“How much did Octopus price my smart and boost EV charging at last month?”</blockquote>
           <blockquote>“Compare this month with the previous equivalent period.”</blockquote>
           <blockquote>“How many Octoplus points do I have?”</blockquote>
         </div>
-        <p className="cost-note">Cost results are estimates, not bills or quotes. They cannot reproduce every discount, credit, tax, or eligibility rule on an Octopus statement.</p>
+        <p className="cost-note">Conventional tariff replays are estimates, not bills or quotes. For the new Intelligent Octopus Go model, the MCP reads separate home and EV rates plus Octopus-priced EV charge records instead of guessing from whole-home data. Subscriptions, credits and other statement adjustments may still be separate.</p>
       </section>
 
       <section className="help-section" id="help">
@@ -406,6 +416,11 @@ export default function Home() {
             <summary>I see “a newer version is available” <span>+</span></summary>
             <p><strong>If you installed with Git:</strong> open Terminal or PowerShell in the MCP folder and run <code>git pull --ff-only</code>, <code>npm ci</code>, and <code>npm run build</code>, then restart ChatGPT or Codex.</p>
             <p><strong>If you downloaded a ZIP:</strong> keep a safe copy of <code>.env</code>, download and unpack the latest ZIP, copy <code>.env</code> into the new folder, run <code>npm ci</code>, <code>npm run build</code>, and <code>npm run setup:codex</code>, update the saved MCP path, then restart the app.</p>
+          </details>
+          <details>
+            <summary>Does it understand the new Intelligent Octopus Go prices? <span>+</span></summary>
+            <p>Yes. Ask it to show your active four-rate EV pricing to see separate home peak, home off-peak, EV peak and EV off-peak rates. You can also ask for Octopus’s EV charge costs over a period, split between smart and non-smart charging.</p>
+            <p>The MCP does not rebuild these prices from whole-home meter readings because the home and car can have different rates in the same half-hour. If no four-rate tariff appears, the change may not have reached your account yet. The Octopus app and statement remain definitive.</p>
           </details>
           <details>
             <summary>I still need help <span>+</span></summary>

@@ -1,6 +1,6 @@
 # Octopus Energy Private MCP setup website
 
-This folder contains the public, beginner-friendly installation website for the MCP. It is intentionally separate from the MCP runtime so publishing the guide does not change its local-only security model.
+This folder contains the public, beginner-friendly installation website for the MCP. It covers setup, privacy, updates and the account-specific Intelligent Octopus Go four-rate/EV charge-cost features. It is intentionally separate from the MCP runtime so publishing the guide does not change its local-only security model.
 
 Public site: <https://octopus-energy-private-mcp-guide.darren138956.chatgpt.site>
 

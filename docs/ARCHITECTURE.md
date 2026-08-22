@@ -9,7 +9,7 @@ MCP client
 McpServer tools/resources/prompts
   │
   ├── period + meter resolution
-  ├── local analytics and tariff replay
+  ├── local analytics and conventional tariff replay
   ├── private file cache (hashed keys)
   └── shared serial request limiter
           │ HTTPS only; fixed origin
@@ -33,7 +33,7 @@ No component listens on a TCP port. The authenticated energy clients reject any 
 - `cache.ts`: atomic local JSON cache, namespaces, statistics and targeted clearing.
 - `rate-limiter.ts`: shared serial queue with a minimum interval and rolling-minute cap.
 - `octopus-client.ts`: REST authentication, retries, safe pagination, account/meter discovery, products, consumption and rates.
-- `graphql-client.ts`: in-memory token lifecycle and a fixed set of read-only operations.
+- `graphql-client.ts`: in-memory token lifecycle and a fixed set of read-only operations, including active four-rate EV tariff prices and Octopus-priced EV charge costs.
 - `periods.ts`: DST-aware named/custom periods in the configured timezone.
 - `analytics.ts`: unit handling, data quality, usage profiles, comparison, cheapest windows and tariff cost replay.
 - `update-check.ts`: bounded, failure-safe semantic-version check against the public GitHub `main` manifest.
@@ -59,4 +59,8 @@ Pagination is capped by both pages and records per MCP call. Tools return `trunc
 
 ## Analytics boundaries
 
-All analytics execute locally. Raw records are deduplicated and sorted before both analysis and tariff replay. The analysis reports coverage, duplicates and gaps instead of presenting incomplete data as complete. Tariff replay uses exact single-register import product/tariff codes and published VAT-inclusive rates. Two-register day/night feeds remain available for inspection but are not replayed against aggregate readings; export readings are not presented as import cost. Gas conversion and billing limitations remain explicit in every affected result.
+All analytics execute locally. Raw records are deduplicated and sorted before both analysis and tariff replay. The analysis reports coverage, duplicates and gaps instead of presenting incomplete data as complete. Conventional tariff replay uses exact single-register import product/tariff codes and published VAT-inclusive rates. Two-register day/night feeds remain available for inspection but are not replayed against aggregate readings; export readings are not presented as import cost. Gas conversion and billing limitations remain explicit in every affected result.
+
+Device-aware EV billing is intentionally a separate path. The new Intelligent Octopus Go model has four simultaneous prices—home peak/off-peak and EV peak/off-peak—and applies smart-charge scheduling and allowance rules that cannot be inferred from aggregate half-hour meter consumption. `octopus_get_ev_tariff_pricing` uses the authenticated GraphQL `account.electricityAgreements.tariff` union and only returns active `FourRateEvTariff` records. `octopus_get_ev_charge_costs` uses the documented `costOfCharge` query and returns Octopus-calculated kWh and pence totals by day, week, month or year. Both operations are named, read-only, locally cached and use the same request limiter as all other Octopus calls.
+
+The conventional REST rate/window tools and local cost tools reject tariff codes that indicate Intelligent Octopus Go, Drive Pack or Power Pack rather than returning a plausible-looking but incomplete rate view or invalid reconstruction. Type-of-use subscription fees, credits, export benefits and other account-level adjustments are not assumed to be part of `costOfCharge`; every affected response directs the user to their Octopus statement for the definitive total.

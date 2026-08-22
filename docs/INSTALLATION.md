@@ -211,10 +211,16 @@ If both questions work, installation is complete.
 - “Analyse my electricity usage over the last 30 days and point out the busiest times.”
 - “Compare this month with the previous equivalent period.”
 - “Find the cheapest two-hour windows on my Agile tariff tomorrow.”
+- “Show the separate home and EV rates on my Intelligent Octopus Go tariff.”
+- “Show Octopus’s EV charging consumption and costs for last month, separating smart charging from boost or other non-smart charging.”
 - “Show my current import and export meters and their active agreements.”
 - “How many Octoplus points do I have?”
 
-The MCP supplies data and estimates, not billing advice. Cost calculations do not reproduce every discount, credit, tax, eligibility rule, or billing adjustment on an Octopus statement.
+The MCP supplies data and estimates, not billing advice. Conventional cost calculations do not reproduce every discount, credit, tax, eligibility rule, or billing adjustment on an Octopus statement.
+
+For the newer Intelligent Octopus Go four-rate model, ask for your **EV tariff pricing** to see separate home peak, home off-peak, EV peak and EV off-peak account rates. Ask for **EV charge costs** to see the consumption and cost that Octopus calculated for smart and non-smart charging over a period. The MCP uses these account-priced Octopus records because ordinary whole-home meter data cannot tell which energy went to the car, whether it was inside the six-hour smart-charge allowance, or whether Boost was used.
+
+Drive Pack and Power Pack are type-of-use arrangements. Their subscription fees, credits and other account-level adjustments may be recorded separately from individual EV charge costs, so always use the Octopus app and statement as the final total.
 
 ## Troubleshooting
 
@@ -256,6 +262,16 @@ Copy the API key again from Octopus Developer settings. Do not copy surrounding 
 ### No consumption data appears
 
 Smart-meter readings can arrive late, and new accounts may not have historical data yet. First ask the MCP to discover meters. If more than one meter is listed, include the meter or property you want in the next question.
+
+### The MCP cannot replay my Intelligent Octopus Go or EV add-on tariff
+
+This is a safety check, not a fault. The new Intelligent Octopus Go model can give the home and car different prices during the same half-hour, while Drive Pack and Power Pack can add separate subscriptions or credits. Whole-home meter readings are not enough to rebuild those rules reliably.
+
+Ask:
+
+> Show my active four-rate EV tariff pricing, then show Octopus’s EV charge costs for last month.
+
+If no four-rate tariff appears, Octopus may not have enabled the new model on your account yet, or your account may use another tariff model. Check the Devices area in the Octopus app. EV charge records can also appear a day or so after charging rather than immediately.
 
 ### The tools work in Codex but not in ChatGPT web
 

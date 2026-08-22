@@ -1,6 +1,7 @@
 export type Fuel = "electricity" | "gas";
 export type Direction = "import" | "export";
 export type GasConsumptionUnit = "auto" | "kwh" | "m3";
+export type EvChargeCostFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
 
 export interface Agreement {
   tariff_code: string;
@@ -98,6 +99,52 @@ export interface CacheProvenance {
   cache_status: CacheStatus;
   stale_cache_used: boolean;
   cache_age_ms?: number;
+}
+
+export interface EvChargeCostRecord {
+  costOfChargeId: string | null;
+  isSmartCharge: boolean | null;
+  krakenflexDeviceId: string | null;
+  reportDate: string | null;
+  totalConsumption: number | null;
+  totalCostExclTax: number | null;
+  totalCostInclTax: number | null;
+}
+
+export interface EvChargeCostsResponse extends CacheProvenance {
+  costOfCharge: EvChargeCostRecord[];
+}
+
+export interface FourRateEvTariff {
+  id: string | null;
+  tariffCode: string | null;
+  productCode: string | null;
+  displayName: string | null;
+  fullName: string | null;
+  isExport: boolean | null;
+  dayRate: number | null;
+  nightRate: number | null;
+  evDevicePeakRate: number | null;
+  evDeviceOffPeakRate: number | null;
+  standingCharge: number | null;
+  preVatDayRate: number | null;
+  preVatNightRate: number | null;
+  preVatEvDevicePeakRate: number | null;
+  preVatEvDeviceOffPeakRate: number | null;
+  preVatStandingCharge: number | null;
+}
+
+export interface FourRateEvAgreement {
+  agreementId: string | null;
+  validFrom: string | null;
+  validTo: string | null;
+  meterPoint: string | null;
+  tariff: FourRateEvTariff;
+}
+
+export interface EvTariffPricingResponse extends CacheProvenance {
+  activeAgreementCount: number;
+  fourRateTariffs: FourRateEvAgreement[];
 }
 
 export interface PaginatedResult<T> extends CacheProvenance {

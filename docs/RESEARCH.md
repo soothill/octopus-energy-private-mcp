@@ -1,6 +1,6 @@
 # Octopus Energy MCP landscape research
 
-Checked on **14 August 2026**.
+MCP landscape checked on **14 August 2026**. EV pricing/API changes checked on **22 August 2026**.
 
 ## Conclusion
 
@@ -26,7 +26,7 @@ The npm and PyPI projects are independent community work and have zero GitHub st
 
 ## Official API facts used in the implementation
 
-From Octopus’s [REST endpoint guide](https://docs.octopus.energy/rest/guides/endpoints/):
+From Octopus’s [REST endpoint guide](https://developer.octopus.energy/guides/rest/api-endpoints/):
 
 - the account endpoint discovers MPAN/MPRN, serials and tariff agreements and requires the customer API key;
 - product and price endpoints are public;
@@ -37,7 +37,24 @@ From Octopus’s [REST endpoint guide](https://docs.octopus.energy/rest/guides/e
 - billing rounds interval consumption half-to-even to 0.01 kWh before multiplying by price;
 - rate records contain VAT-exclusive and VAT-inclusive pence/kWh values.
 
-The [official GraphQL documentation](https://developer.octopus.energy/graphql/) now documents authentication, smart-meter telemetry, devices, completed/planned dispatches, loyalty balance and rate-limit information. This server implements only named, read-only operations for those fields. It does not offer an arbitrary query tool.
+The [official GraphQL documentation](https://developer.octopus.energy/graphql/) now documents authentication, smart-meter telemetry, devices, completed/planned dispatches, loyalty balance, rate-limit information and device-aware EV pricing. This server implements only named, read-only operations for those fields. It does not offer an arbitrary query tool.
+
+## August 2026 EV pricing change
+
+Octopus announced that Intelligent Octopus Go is moving to a dynamic four-rate model:
+
+- home off-peak remains 23:30–05:30;
+- the EV receives up to six off-peak smart-charging hours per midday-to-midday day;
+- an Octopus-scheduled EV charge outside the home window can give the home the off-peak price for that half-hour while it is within the allowance; and
+- EV charging beyond the allowance, or Boost charging, can use the EV peak price even while the home is off-peak.
+
+Octopus also says billing is in half-hour chunks and that the new home/car breakdown can arrive roughly a day behind real time. Source: [Intelligent Octopus Go: Smart charging and Charge Cap explained](https://octopus.energy/blog/intelligent-octopus-go-smarter-charging-for-a-greener-grid/).
+
+The GraphQL schema now exposes [`FourRateEvTariff`](https://developer.octopus.energy/graphql/reference/objects/fourrateevtariff/) with separate VAT-inclusive and VAT-exclusive home peak, home off-peak, EV device peak and EV device off-peak prices, plus the standing charge. The authenticated account agreement exposes this tariff union, allowing the MCP to return the prices actually attached to the account rather than a hard-coded advertised rate.
+
+The documented [`costOfCharge`](https://developer.octopus.energy/graphql/reference/queries/costofcharge/) query accepts an account, frequency and date bounds. Its records identify smart versus non-smart charging and return consumption in kWh plus costs in pence excluding and including tax. This is the safest available source for historic EV charging prices because aggregate household consumption cannot distinguish car energy or reconstruct the allowance.
+
+Octopus’s [smart tariff terms](https://octopus.energy/policies/smart-tariffs-terms-and-condition/) describe Intelligent Drive Pack and Power Pack as type-of-use arrangements. Drive Pack covers Octopus-controlled EV smart charging while other usage and Boost are charged on the household tariff; Power Pack applies later credits under its own eligibility rules. Subscription fees, credits, exports and other ledger-level adjustments therefore must not be assumed to be included in individual `costOfCharge` records.
 
 ## Design response
 
@@ -50,4 +67,7 @@ The research directly led to these choices:
 - conservative local throttling in addition to Octopus’s own GraphQL points system;
 - explicit gas units and warnings instead of unreliable inference;
 - bounded pagination and local analytics so repeated comparisons do not refetch unnecessarily;
-- clear cost-estimate caveats and an exact-tariff-code interface.
+- clear cost-estimate caveats and an exact-tariff-code interface;
+- account-specific `FourRateEvTariff` prices instead of hard-coded EV advertising rates;
+- Octopus-priced EV charge history for device-aware tariffs; and
+- a fail-closed block on local cost replay for Intelligent Octopus Go, Drive Pack and Power Pack codes.
