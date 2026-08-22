@@ -450,3 +450,12 @@ export function productCodeFromTariff(tariffCode: string): string {
 export function isDualRegisterTariff(tariffCode: string): boolean {
   return /^E-2R-/.test(tariffCode.trim().toUpperCase());
 }
+
+export function isDeviceAwareEvTariff(tariffCode: string): boolean {
+  const normalized = tariffCode.trim().toUpperCase();
+  return /(?:^|-)INTELLI-FIX(?:-|$)/.test(normalized) ||
+    /(?:^|-)IOG-SMB-FIX(?:-|$)/.test(normalized) ||
+    /(?:^|-)INTELLIGENT-OCTOPUS(?:-GO)?(?:-|$)/.test(normalized) ||
+    /(?:^|-)DRIVE-PACK(?:-|$)/.test(normalized) ||
+    /(?:^|-)POWER-PACK(?:-|$)/.test(normalized);
+}

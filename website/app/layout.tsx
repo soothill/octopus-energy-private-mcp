@@ -23,6 +23,8 @@ export const metadata: Metadata = {
     "ChatGPT energy data",
     "Codex MCP server",
     "Agile Octopus analysis",
+    "Intelligent Octopus Go four rate pricing",
+    "Octopus EV charge costs",
     "MCP installation guide",
   ],
   robots: {

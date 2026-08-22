@@ -41,6 +41,170 @@ describe("Octopus GraphQL client", () => {
     expect(headers[1]?.get("authorization")).toBe(`JWT ${token}`);
   });
 
+  it("requests Octopus-priced EV charge costs with account and date boundaries", async () => {
+    const bodies: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    let calls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      calls += 1;
+      bodies.push(JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> });
+      if (calls === 1) return Response.json({ data: { obtainKrakenToken: { token: "opaque-token" } } });
+      if (calls === 2) {
+        return Response.json({
+          data: {
+            costOfCharge: [{
+              costOfChargeId: "charge-1",
+              isSmartCharge: true,
+              krakenflexDeviceId: "flex-1",
+              reportDate: "2026-08-01",
+              totalConsumption: 7.25,
+              totalCostExclTax: 57.14,
+              totalCostInclTax: 60
+            }]
+          }
+        });
+      }
+      if (calls === 3) return Response.json({ data: { costOfCharge: null } });
+      return Response.json({
+        data: {
+          costOfCharge: [
+            {
+              costOfChargeId: "charge-2",
+              isSmartCharge: true,
+              krakenflexDeviceId: "flex-1",
+              reportDate: "2026-08-06",
+              totalConsumption: 1,
+              totalCostExclTax: 8,
+              totalCostInclTax: 8.4
+            },
+            {
+              costOfChargeId: "charge-3",
+              isSmartCharge: true,
+              krakenflexDeviceId: "flex-1",
+              reportDate: "2026-08-07",
+              totalConsumption: 1,
+              totalCostExclTax: 8,
+              totalCostInclTax: 8.4
+            }
+          ]
+        }
+      });
+    });
+    const config = testConfig({ maxRecordsPerCall: 1 });
+    const client = new OctopusGraphQlClient(
+      config,
+      new FileCache(config.cacheDir, false),
+      new RequestRateLimiter(120, 1),
+      { fetch: fetchMock }
+    );
+
+    await expect(client.getEvChargeCosts({
+      accountNumber: "a-ev1234",
+      frequency: "DAILY",
+      startDate: "2026-08-01",
+      reportDate: "2026-08-03"
+    })).resolves.toMatchObject({
+      costOfCharge: [{
+        costOfChargeId: "charge-1",
+        isSmartCharge: true,
+        totalConsumption: 7.25,
+        totalCostInclTax: 60
+      }],
+      cache_status: "disabled",
+      stale_cache_used: false
+    });
+    expect(bodies[1]?.query).toContain("query EvChargeCosts");
+    expect(bodies[1]?.query).toContain("totalCostInclTax");
+    expect(bodies[1]?.variables).toEqual({
+      accountNumber: "A-EV1234",
+      frequency: "DAILY",
+      startDate: "2026-08-01",
+      reportDate: "2026-08-03"
+    });
+    await expect(client.getEvChargeCosts({
+      accountNumber: "a-ev1234",
+      frequency: "DAILY",
+      startDate: "2026-08-04",
+      reportDate: "2026-08-05"
+    })).rejects.toThrow("Octopus returned no EV charge cost dataset");
+    await expect(client.getEvChargeCosts({
+      accountNumber: "a-ev1234",
+      frequency: "DAILY",
+      startDate: "2026-08-06",
+      reportDate: "2026-08-07"
+    })).rejects.toThrow("exceeding OCTOPUS_MAX_RECORDS_PER_CALL=1");
+  });
+
+  it("returns active four-rate EV tariff prices with separate home and device rates", async () => {
+    const bodies: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    let calls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      calls += 1;
+      bodies.push(JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> });
+      if (calls === 1) return Response.json({ data: { obtainKrakenToken: { token: "opaque-token" } } });
+      return Response.json({
+        data: {
+          account: {
+            electricityAgreements: [
+              {
+                id: 123,
+                validFrom: "2026-08-01T00:00:00+00:00",
+                validTo: null,
+                meterPoint: { mpan: "1234567890123" },
+                tariff: {
+                  __typename: "FourRateEvTariff",
+                  id: "tariff-1",
+                  tariffCode: "E-1R-INTELLI-FIX-12M-26-08-01-A",
+                  productCode: "INTELLI-FIX-12M-26-08-01",
+                  displayName: "Intelligent Octopus Go",
+                  fullName: "Intelligent Octopus Go August 2026",
+                  isExport: false,
+                  dayRate: 28,
+                  nightRate: 8,
+                  evDevicePeakRate: 28,
+                  evDeviceOffPeakRate: 8,
+                  standingCharge: 45,
+                  preVatDayRate: 26.6667,
+                  preVatNightRate: 7.619,
+                  preVatEvDevicePeakRate: 26.6667,
+                  preVatEvDeviceOffPeakRate: 7.619,
+                  preVatStandingCharge: 42.8571
+                }
+              },
+              { id: 456, tariff: { __typename: "StandardTariff" } }
+            ]
+          }
+        }
+      });
+    });
+    const config = testConfig();
+    const client = new OctopusGraphQlClient(
+      config,
+      new FileCache(config.cacheDir, false),
+      new RequestRateLimiter(120, 1),
+      { fetch: fetchMock }
+    );
+
+    await expect(client.getEvTariffPricing("a-ev1234")).resolves.toMatchObject({
+      activeAgreementCount: 2,
+      fourRateTariffs: [{
+        agreementId: "123",
+        meterPoint: "1234567890123",
+        tariff: {
+          tariffCode: "E-1R-INTELLI-FIX-12M-26-08-01-A",
+          dayRate: 28,
+          nightRate: 8,
+          evDevicePeakRate: 28,
+          evDeviceOffPeakRate: 8
+        }
+      }],
+      cache_status: "disabled",
+      stale_cache_used: false
+    });
+    expect(bodies[1]?.query).toContain("query EvTariffPricing");
+    expect(bodies[1]?.query).toContain("... on FourRateEvTariff");
+    expect(bodies[1]?.variables).toEqual({ accountNumber: "A-EV1234" });
+  });
+
   it("uses and discloses stale query data only for transient failures", async () => {
     const directory = await mkdtemp(join(tmpdir(), "octopus-graphql-stale-"));
     try {

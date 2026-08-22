@@ -2,7 +2,14 @@ import { createHash } from "node:crypto";
 import type { FileCache } from "./cache.js";
 import { OCTOPUS_GRAPHQL_URL, OCTOPUS_REST_ORIGIN, type ServerConfig } from "./config.js";
 import type { RequestRateLimiter } from "./rate-limiter.js";
-import type { CacheProvenance } from "./types.js";
+import type {
+  CacheProvenance,
+  EvChargeCostFrequency,
+  EvChargeCostRecord,
+  EvChargeCostsResponse,
+  EvTariffPricingResponse,
+  FourRateEvTariff
+} from "./types.js";
 
 interface GraphQlEnvelope<T> {
   data?: T;
@@ -14,6 +21,22 @@ interface GraphQlEnvelope<T> {
 
 interface TokenMutation {
   obtainKrakenToken?: { token?: string };
+}
+
+interface EvChargeCostsQuery extends Record<string, unknown> {
+  costOfCharge?: EvChargeCostRecord[] | null;
+}
+
+interface EvTariffPricingQuery extends Record<string, unknown> {
+  account?: {
+    electricityAgreements?: Array<{
+      id?: string | number | null;
+      validFrom?: string | null;
+      validTo?: string | null;
+      meterPoint?: { mpan?: string | null } | null;
+      tariff?: ({ __typename?: string | null } & Partial<FourRateEvTariff>) | null;
+    } | null> | null;
+  } | null;
 }
 
 class TransientGraphQlError extends Error {
@@ -166,18 +189,24 @@ export class OctopusGraphQlClient {
     operationName: string,
     query: string,
     variables: Record<string, unknown>,
-    ttlMs: number
+    ttlMs: number,
+    validate?: (data: T) => void
   ): Promise<T & CacheProvenance> {
     const key = `graphql:${operationName}:${createHash("sha256").update(JSON.stringify(variables)).digest("hex")}`;
     const cached = await this.cache.get<T>(key);
-    if (cached) return this.withCacheProvenance(cached.value, "hit", cached.ageMs);
+    if (cached) {
+      validate?.(cached.value);
+      return this.withCacheProvenance(cached.value, "hit", cached.ageMs);
+    }
     const stale = await this.cache.get<T>(key, true);
     try {
       const data = await this.rawRequest<T>(query, variables, await this.accessToken());
+      validate?.(data);
       await this.cache.set(key, "graphql", data, ttlMs);
       return this.withCacheProvenance(data, this.cache.enabled ? "miss" : "disabled");
     } catch (error) {
       if (stale && error instanceof TransientGraphQlError) {
+        validate?.(stale.value);
         return this.withCacheProvenance(stale.value, "stale", stale.ageMs);
       }
       throw error;
@@ -253,6 +282,139 @@ export class OctopusGraphQlClient {
       { accountNumber: this.account(accountOverride) },
       15 * 60 * 1000
     );
+  }
+
+  async getEvChargeCosts(input: {
+    accountNumber?: string;
+    frequency: EvChargeCostFrequency;
+    startDate: string;
+    reportDate: string;
+  }): Promise<EvChargeCostsResponse> {
+    const assertValid: (
+      data: EvChargeCostsQuery
+    ) => asserts data is EvChargeCostsQuery & { costOfCharge: EvChargeCostRecord[] } = (data) => {
+      if (!Array.isArray(data.costOfCharge)) {
+        throw new Error("Octopus returned no EV charge cost dataset for the requested account and dates");
+      }
+      if (data.costOfCharge.length > this.config.maxRecordsPerCall) {
+        throw new Error(
+          `Octopus returned ${data.costOfCharge.length} EV charge records, exceeding OCTOPUS_MAX_RECORDS_PER_CALL=${this.config.maxRecordsPerCall}; request a shorter period or a coarser frequency`
+        );
+      }
+    };
+    const query = `
+      query EvChargeCosts(
+        $accountNumber: String!, $frequency: DataFrequency!, $startDate: Date, $reportDate: Date
+      ) {
+        costOfCharge(
+          accountNumber: $accountNumber,
+          frequency: $frequency,
+          startDate: $startDate,
+          reportDate: $reportDate
+        ) {
+          costOfChargeId
+          isSmartCharge
+          krakenflexDeviceId
+          reportDate
+          totalConsumption
+          totalCostExclTax
+          totalCostInclTax
+        }
+      }
+    `;
+    const result = await this.query<EvChargeCostsQuery>(
+      "EvChargeCosts",
+      query,
+      {
+        accountNumber: this.account(input.accountNumber),
+        frequency: input.frequency,
+        startDate: input.startDate,
+        reportDate: input.reportDate
+      },
+      15 * 60 * 1000,
+      assertValid
+    );
+    assertValid(result);
+    return { ...result, costOfCharge: result.costOfCharge };
+  }
+
+  async getEvTariffPricing(accountOverride?: string): Promise<EvTariffPricingResponse> {
+    const query = `
+      query EvTariffPricing($accountNumber: String!) {
+        account(accountNumber: $accountNumber) {
+          electricityAgreements(active: true) {
+            id
+            validFrom
+            validTo
+            meterPoint { mpan }
+            tariff {
+              __typename
+              ... on FourRateEvTariff {
+                id
+                tariffCode
+                productCode
+                displayName
+                fullName
+                isExport
+                dayRate
+                nightRate
+                evDevicePeakRate
+                evDeviceOffPeakRate
+                standingCharge
+                preVatDayRate
+                preVatNightRate
+                preVatEvDevicePeakRate
+                preVatEvDeviceOffPeakRate
+                preVatStandingCharge
+              }
+            }
+          }
+        }
+      }
+    `;
+    const result = await this.query<EvTariffPricingQuery>(
+      "EvTariffPricing",
+      query,
+      { accountNumber: this.account(accountOverride) },
+      30 * 60 * 1000
+    );
+    const agreements = result.account?.electricityAgreements ?? [];
+    const fourRateTariffs = agreements.flatMap((agreement) => {
+      if (!agreement || agreement.tariff?.__typename !== "FourRateEvTariff") return [];
+      const tariff = agreement.tariff;
+      const normalizedTariff: FourRateEvTariff = {
+        id: tariff.id ?? null,
+        tariffCode: tariff.tariffCode ?? null,
+        productCode: tariff.productCode ?? null,
+        displayName: tariff.displayName ?? null,
+        fullName: tariff.fullName ?? null,
+        isExport: tariff.isExport ?? null,
+        dayRate: tariff.dayRate ?? null,
+        nightRate: tariff.nightRate ?? null,
+        evDevicePeakRate: tariff.evDevicePeakRate ?? null,
+        evDeviceOffPeakRate: tariff.evDeviceOffPeakRate ?? null,
+        standingCharge: tariff.standingCharge ?? null,
+        preVatDayRate: tariff.preVatDayRate ?? null,
+        preVatNightRate: tariff.preVatNightRate ?? null,
+        preVatEvDevicePeakRate: tariff.preVatEvDevicePeakRate ?? null,
+        preVatEvDeviceOffPeakRate: tariff.preVatEvDeviceOffPeakRate ?? null,
+        preVatStandingCharge: tariff.preVatStandingCharge ?? null
+      };
+      return [{
+        agreementId: agreement.id === undefined || agreement.id === null ? null : String(agreement.id),
+        validFrom: agreement.validFrom ?? null,
+        validTo: agreement.validTo ?? null,
+        meterPoint: agreement.meterPoint?.mpan ?? null,
+        tariff: normalizedTariff
+      }];
+    });
+    return {
+      activeAgreementCount: agreements.filter(Boolean).length,
+      fourRateTariffs,
+      cache_status: result.cache_status,
+      stale_cache_used: result.stale_cache_used,
+      ...(result.cache_age_ms === undefined ? {} : { cache_age_ms: result.cache_age_ms })
+    };
   }
 
   async getFlexPlannedDispatches(deviceIdOverride?: string): Promise<unknown> {

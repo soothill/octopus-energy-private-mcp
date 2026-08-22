@@ -1,6 +1,6 @@
 # Octopus Energy Private MCP
 
-A privacy-first, local Model Context Protocol server for querying and analysing an Octopus Energy account. It exposes 21 read/analysis tools for meters, consumption, products, tariff rates, cost replay, time-of-use patterns, smart-device telemetry, dispatches and Octoplus points.
+A privacy-first, local Model Context Protocol server for querying and analysing an Octopus Energy account. It exposes 23 read/analysis tools for meters, consumption, products, conventional tariff rates, four-rate EV pricing, Octopus-priced EV charge costs, cost replay, time-of-use patterns, smart-device telemetry, dispatches and Octoplus points.
 
 This is an independent community project. It is not affiliated with or endorsed by Octopus Energy.
 
@@ -122,6 +122,8 @@ The image runs as an unprivileged user and persists only the cache volume. Docke
 - “Compare this month with the immediately preceding equivalent period.”
 - “Find the ten cheapest two-hour windows on my Agile tariff tomorrow.”
 - “Replay last month’s actual use against these three exact tariff codes.”
+- “Show the four rates on my new Intelligent Octopus Go tariff.”
+- “How much energy and money did Octopus record for my smart and boost EV charging last month?”
 - “Show my current import and export meters and their active agreements.”
 - “What smart devices does Octopus know about, and what dispatches are planned?”
 - “How many Octoplus points do I have?”
@@ -135,6 +137,7 @@ The image runs as an unprivileged user and persists only the cache volume. Docke
 | Products | `octopus_list_products`, `octopus_get_product` |
 | Consumption | `octopus_get_consumption`, `octopus_analyse_usage`, `octopus_compare_usage` |
 | Tariffs | `octopus_get_tariff_rates`, `octopus_get_current_rates`, `octopus_find_cheapest_windows`, `octopus_estimate_cost`, `octopus_compare_tariffs` |
+| EV pricing | `octopus_get_ev_tariff_pricing`, `octopus_get_ev_charge_costs` |
 | Smart devices | `octopus_get_smart_flex_devices`, `octopus_get_smart_meter_devices`, `octopus_get_smart_meter_telemetry`, `octopus_get_completed_dispatches`, `octopus_get_planned_dispatches` |
 | Octoplus/limits | `octopus_get_octoplus_balance`, `octopus_get_api_rate_limits` |
 | Local maintenance | `octopus_clear_cache` |
@@ -158,6 +161,10 @@ For m3, the default 11.184 kWh/m3 conversion is an estimate. Real bills use a vo
 Cost tools match each consumption interval to published VAT-inclusive rates, round interval consumption half-to-even to 0.01 kWh as documented by Octopus, and add the applicable daily standing charge. They do not reproduce discounts, credits, export payments, debt, taxes outside the published rate, special eligibility rules, meter-specific gas calorific values or Octopus’s complete billing engine. Results are comparisons and estimates, not quotes or bills.
 
 Two-register electricity tariffs expose separate day and night feeds through the rate tools. Cost replay rejects those tariffs because aggregate half-hour consumption does not identify the billed register. Export meters are also rejected by cost tools because their readings represent tariff revenue rather than import cost. Cheapest-window analysis accepts only finite, contiguous 30-minute rate records.
+
+The newer Intelligent Octopus Go model separates home peak, home off-peak, EV peak and EV off-peak prices. It can price the home and car differently in the same half-hour and applies an EV smart-charge allowance, so aggregate smart-meter readings cannot reproduce the bill. `octopus_get_ev_tariff_pricing` reads the active account-specific four-rate tariff directly from Octopus GraphQL. `octopus_get_ev_charge_costs` reads Octopus-calculated EV consumption and cost records, split between smart and non-smart charging, for a chosen period. Octopus accepts whole dates for this charge history, so a rolling or timestamp period is expanded to the whole local dates that cover it; the response shows both the requested and effective periods. If any returned charge record lacks a consumption or cost value, the affected aggregate is `null` and marked incomplete instead of presenting a partial subtotal; a complete empty list correctly returns zero totals, while an unavailable (`null`) Octopus dataset produces an error. The result is validated against `OCTOPUS_MAX_RECORDS_PER_CALL` before it can be cached or summarized; request a shorter period or weekly/monthly frequency if the limit is exceeded. Conventional REST rate/window tools and local tariff replay deliberately reject known four-rate Intelligent Octopus Go, Drive Pack and Power Pack codes and direct the caller to these account-aware tools. Legacy `INTELLI-VAR` tariffs remain supported by the conventional REST tools.
+
+Under Octopus’s published rollout rules, the home normally receives its off-peak price from 23:30–05:30, while the EV receives up to six actual smart-charging hours per midday-to-midday day. Octopus-scheduled charging outside the home window can also make the home off-peak for that half-hour; charging beyond the allowance or using Boost can move the EV to its peak price. See Octopus’s [four-rate and Charge Cap explanation](https://octopus.energy/blog/intelligent-octopus-go-smarter-charging-for-a-greener-grid/). Drive Pack and Power Pack are type-of-use arrangements whose subscription, credits or other account-level adjustments may be separate from the returned charge records; see the [smart tariff terms](https://octopus.energy/policies/smart-tariffs-terms-and-condition/). The Octopus app and statement remain definitive.
 
 ## Configuration
 
@@ -183,7 +190,7 @@ Two-register electricity tariffs expose separate day and night feeds through the
 
 ## API behaviour and limits
 
-The implementation follows Octopus’s [REST endpoint guide](https://docs.octopus.energy/rest/guides/endpoints/) for account discovery, products, half-hourly consumption, pagination, timezones, gas units and prices. Smart-device features use named queries from the official [GraphQL documentation](https://developer.octopus.energy/graphql/).
+The implementation follows Octopus’s [REST endpoint guide](https://developer.octopus.energy/guides/rest/api-endpoints/) for account discovery, products, half-hourly consumption, pagination, timezones, gas units and prices. Smart-device and device-aware EV pricing features use named queries from the official [GraphQL documentation](https://developer.octopus.energy/graphql/), including the documented [`FourRateEvTariff`](https://developer.octopus.energy/graphql/reference/objects/fourrateevtariff/) and [`costOfCharge`](https://developer.octopus.energy/graphql/reference/queries/costofcharge/) fields.
 
 Octopus does not publish one simple REST request-per-minute limit in the REST guide, so the server uses a deliberately conservative configurable local cap. GraphQL has a points-based allowance and field-specific limits; `octopus_get_api_rate_limits` reports both the live Octopus status and local queue. Reducing local limits is safe. Increasing them can cause longer Octopus throttles and is capped by configuration validation.
 

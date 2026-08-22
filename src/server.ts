@@ -5,7 +5,12 @@ import { analyseUsage, compareAnalyses, estimateCost, findCheapestWindows, norma
 import { FileCache } from "./cache.js";
 import { publicConfig, type ServerConfig } from "./config.js";
 import { OctopusGraphQlClient } from "./graphql-client.js";
-import { isDualRegisterTariff, OctopusRestClient, productCodeFromTariff } from "./octopus-client.js";
+import {
+  isDeviceAwareEvTariff,
+  isDualRegisterTariff,
+  OctopusRestClient,
+  productCodeFromTariff
+} from "./octopus-client.js";
 import { PERIOD_ALIASES, previousEquivalentPeriod, resolvePeriod } from "./periods.js";
 import { RequestRateLimiter } from "./rate-limiter.js";
 import { formatUpdateNotice, notCheckedUpdateStatus, type UpdateStatus } from "./update-check.js";
@@ -13,6 +18,7 @@ import { CURRENT_VERSION } from "./version.js";
 import type {
   CacheProvenance,
   ConsumptionRecord,
+  EvChargeCostRecord,
   Fuel,
   GasConsumptionUnit,
   MeterDescriptor,
@@ -122,11 +128,76 @@ function cacheProvenance(value: CacheProvenance): CacheProvenance {
 }
 
 function assertCostTariffSupported(tariffCode: string): void {
+  if (isDeviceAwareEvTariff(tariffCode)) {
+    throw new Error(
+      "Local cost replay does not support device-aware Intelligent Octopus Go, Drive Pack, or Power Pack pricing because aggregate meter readings do not identify the EV, smart-charge allowance, or type-of-use charges. Use octopus_get_ev_charge_costs for Octopus-priced EV charging."
+    );
+  }
   if (isDualRegisterTariff(tariffCode)) {
     throw new Error(
       "Cost replay does not support two-register tariffs because aggregate half-hour readings do not identify day and night registers"
     );
   }
+}
+
+function assertPublishedRateViewSupported(tariffCode: string): void {
+  if (isDeviceAwareEvTariff(tariffCode)) {
+    throw new Error(
+      "The conventional REST rate feed cannot represent separate home and EV prices for this device-aware tariff. Use octopus_get_ev_tariff_pricing for the active account-specific four-rate view."
+    );
+  }
+}
+
+function finiteTotal(values: Array<number | null>): number | null {
+  if (values.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+    return null;
+  }
+  return (values as number[]).reduce((total, value) => total + value, 0);
+}
+
+function summarizeEvChargeCosts(records: EvChargeCostRecord[]) {
+  const consumption = finiteTotal(records.map((record) => record.totalConsumption));
+  const costExclTax = finiteTotal(records.map((record) => record.totalCostExclTax));
+  const costInclTax = finiteTotal(records.map((record) => record.totalCostInclTax));
+  return {
+    records: records.length,
+    smart_charge_records: records.filter((record) => record.isSmartCharge === true).length,
+    non_smart_charge_records: records.filter((record) => record.isSmartCharge === false).length,
+    unclassified_records: records.filter((record) => record.isSmartCharge === null).length,
+    total_consumption_kwh: consumption === null ? null : Number(consumption.toFixed(3)),
+    total_cost_excl_tax_pence: costExclTax === null ? null : Number(costExclTax.toFixed(3)),
+    total_cost_incl_tax_pence: costInclTax === null ? null : Number(costInclTax.toFixed(3)),
+    total_cost_incl_tax_gbp: costInclTax === null ? null : Number((costInclTax / 100).toFixed(2)),
+    totals_complete: {
+      consumption: consumption !== null,
+      cost_excl_tax: costExclTax !== null,
+      cost_incl_tax: costInclTax !== null
+    }
+  };
+}
+
+function evChargeDateRange(range: PeriodRange, timezone: string) {
+  const start = DateTime.fromISO(range.from, { setZone: true }).setZone(timezone);
+  const inclusiveEnd = DateTime.fromISO(range.to, { setZone: true }).setZone(timezone).minus({ milliseconds: 1 });
+  const startDate = start.toISODate();
+  const reportDate = inclusiveEnd.toISODate();
+  if (!start.isValid || !inclusiveEnd.isValid || !startDate || !reportDate) {
+    throw new Error("Could not convert the requested period into Octopus EV charge dates");
+  }
+  const effectiveFrom = start.startOf("day");
+  const effectiveTo = inclusiveEnd.plus({ days: 1 }).startOf("day");
+  return {
+    start_date: startDate,
+    report_date: reportDate,
+    effective_period: {
+      from: effectiveFrom.toUTC().toISO()!,
+      to: effectiveTo.toUTC().toISO()!,
+      label: `${startDate} to ${reportDate} (whole Octopus dates)`
+    },
+    requested_period_adjusted:
+      effectiveFrom.toMillis() !== start.toMillis() ||
+      effectiveTo.toMillis() !== DateTime.fromISO(range.to, { setZone: true }).setZone(timezone).toMillis()
+  };
 }
 
 function redactAccountAddresses(value: unknown): unknown {
@@ -163,7 +234,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       capabilities: { tools: {}, resources: {}, prompts: {} },
       instructions:
-        "Privacy-first, read-only Octopus Energy access. Start with octopus_connection_status and octopus_discover_meters. Prefer named periods and local analysis tools; use exact tariff codes for costs. Respect truncated flags and unit/cost warnings. Requests are locally throttled and cached. Credentials may only be sent to api.octopus.energy; never ask the user to paste them into chat. octopus_clear_cache only deletes local response files and requires confirm=true." +
+        "Privacy-first, read-only Octopus Energy access. Start with octopus_connection_status and octopus_discover_meters. Prefer named periods and local analysis tools; use exact tariff codes for conventional costs, octopus_get_ev_tariff_pricing for device-aware EV rates, and octopus_get_ev_charge_costs for device-aware EV charge history. Respect truncated flags and unit/cost warnings. Requests are locally throttled and cached. Credentials may only be sent to api.octopus.energy; never ask the user to paste them into chat. octopus_clear_cache only deletes local response files and requires confirm=true." +
         (updateNotice ? ` IMPORTANT: Tell the user about this update before using other tools. ${updateNotice}` : "")
     }
   );
@@ -392,12 +463,13 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     "octopus_get_tariff_rates",
     {
       title: "Get tariff rates",
-      description: "Fetch VAT-inclusive/exclusive unit rates and standing charges for an exact tariff over a period.",
+      description: "Fetch VAT-inclusive/exclusive unit rates and standing charges for an exact conventional tariff over a period. Use the EV pricing tool for device-aware four-rate tariffs.",
       inputSchema: tariffSchema,
       annotations: readOnly
     },
     safe(async (args) => {
       const target = targetFromInput(args);
+      assertPublishedRateViewSupported(target.tariff_code);
       const range = resolvePeriod(args, config.timezone);
       if (isDualRegisterTariff(target.tariff_code)) {
         const [dayUnitRates, nightUnitRates, standingCharges] = await Promise.all([
@@ -434,7 +506,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     "octopus_get_current_rates",
     {
       title: "Get current tariff rates",
-      description: "Return the current published single rate or register-specific day/night rates and standing charge.",
+      description: "Return current conventional single or register-specific day/night rates and standing charge. Use the EV pricing tool for device-aware four-rate tariffs.",
       inputSchema: z.object({
         fuel: z.enum(["electricity", "gas"]),
         tariff_code: z.string().min(1),
@@ -444,6 +516,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     },
     safe(async (args) => {
       const target = targetFromInput(args);
+      assertPublishedRateViewSupported(target.tariff_code);
       const now = DateTime.now();
       const from = now.minus({ hours: 2 }).toUTC().toISO()!;
       const to = now.plus({ hours: 24 }).toUTC().toISO()!;
@@ -492,7 +565,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     "octopus_find_cheapest_windows",
     {
       title: "Find cheapest tariff windows",
-      description: "Find the cheapest contiguous half-hour windows in published rates, useful for Agile-style tariffs.",
+      description: "Find the cheapest contiguous half-hour windows in conventional published rates, useful for Agile-style tariffs. Device-aware EV schedules must use Octopus account pricing instead.",
       inputSchema: z.object({
         fuel: z.enum(["electricity", "gas"]).default("electricity"),
         tariff_code: z.string().min(1),
@@ -505,6 +578,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     },
     safe(async (args) => {
       const target = targetFromInput(args);
+      assertPublishedRateViewSupported(target.tariff_code);
       if (isDualRegisterTariff(target.tariff_code)) {
         throw new Error("Cheapest time windows are not available for register-based day/night tariffs");
       }
@@ -716,6 +790,108 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
   );
 
   server.registerTool(
+    "octopus_get_ev_tariff_pricing",
+    {
+      title: "Get active four-rate EV tariff pricing",
+      description: "Return the separate home peak/off-peak and EV peak/off-peak prices for active four-rate Intelligent Octopus Go agreements. Prices come from the authenticated Octopus account.",
+      inputSchema: z.object({ account_number: z.string().optional() }),
+      annotations: readOnly
+    },
+    safe(async ({ account_number }) => {
+      const data = await graphql.getEvTariffPricing(account_number);
+      return {
+        pricing_source: "Octopus Energy account FourRateEvTariff",
+        pricing_model: "four_rate_ev_tariff",
+        rate_units: {
+          unit_rates: "pence per kWh",
+          standing_charge: "pence per day"
+        },
+        active_electricity_agreements_examined: data.activeAgreementCount,
+        four_rate_ev_tariffs: data.fourRateTariffs.map((agreement) => ({
+          agreement_id: agreement.agreementId,
+          valid_from: agreement.validFrom,
+          valid_to: agreement.validTo,
+          meter_point: agreement.meterPoint,
+          tariff_id: agreement.tariff.id,
+          tariff_code: agreement.tariff.tariffCode,
+          product_code: agreement.tariff.productCode,
+          display_name: agreement.tariff.displayName,
+          full_name: agreement.tariff.fullName,
+          is_export: agreement.tariff.isExport,
+          rates_inc_vat_pence_per_kwh: {
+            home_peak: agreement.tariff.dayRate,
+            home_off_peak: agreement.tariff.nightRate,
+            ev_peak: agreement.tariff.evDevicePeakRate,
+            ev_off_peak: agreement.tariff.evDeviceOffPeakRate
+          },
+          rates_excl_vat_pence_per_kwh: {
+            home_peak: agreement.tariff.preVatDayRate,
+            home_off_peak: agreement.tariff.preVatNightRate,
+            ev_peak: agreement.tariff.preVatEvDevicePeakRate,
+            ev_off_peak: agreement.tariff.preVatEvDeviceOffPeakRate
+          },
+          standing_charge_inc_vat_pence_per_day: agreement.tariff.standingCharge,
+          standing_charge_excl_vat_pence_per_day: agreement.tariff.preVatStandingCharge
+        })),
+        cache: cacheProvenance(data),
+        caveats: [
+          "An empty list means Octopus did not return an active FourRateEvTariff for this account; the rollout may not have reached the account or it may use another tariff model.",
+          "For the new Intelligent Octopus Go model, home off-peak is normally 23:30–05:30 and the EV receives up to six off-peak smart-charging hours per midday-to-midday day. The Octopus app and account terms remain authoritative.",
+          "Use octopus_get_ev_charge_costs for Octopus-priced historic charging consumption and costs."
+        ]
+      };
+    })
+  );
+
+  server.registerTool(
+    "octopus_get_ev_charge_costs",
+    {
+      title: "Get Octopus-priced EV charge costs",
+      description: "Return Octopus account-priced EV charging consumption and costs. Use this for Intelligent Octopus Go four-rate/Charge Cap pricing and type-of-use EV arrangements instead of replaying aggregate meter rates.",
+      inputSchema: z.object({
+        account_number: z.string().optional(),
+        ...periodFields,
+        frequency: z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]).default("DAILY")
+      }),
+      annotations: readOnly
+    },
+    safe(async (args) => {
+      const range = resolvePeriod(args, config.timezone);
+      const dates = evChargeDateRange(range, config.timezone);
+      const data = await graphql.getEvChargeCosts({
+        ...(args.account_number ? { accountNumber: args.account_number } : {}),
+        frequency: args.frequency,
+        startDate: dates.start_date,
+        reportDate: dates.report_date
+      });
+      return {
+        requested_period: range,
+        octopus_date_range: {
+          start_date: dates.start_date,
+          report_date: dates.report_date
+        },
+        effective_period: dates.effective_period,
+        requested_period_adjusted: dates.requested_period_adjusted,
+        frequency: args.frequency,
+        pricing_source: "Octopus Energy account costOfCharge",
+        pricing_model: "device_aware_ev_charging",
+        summary: summarizeEvChargeCosts(data.costOfCharge),
+        charges: data.costOfCharge,
+        cache: cacheProvenance(data),
+        caveats: [
+          "These are Octopus-calculated EV charge costs, not a reconstruction from aggregate smart-meter consumption.",
+          ...(dates.requested_period_adjusted
+            ? ["Octopus costOfCharge accepts whole dates. The requested sub-day boundaries were expanded to the effective whole-day period shown above."]
+            : []),
+          "A null aggregate means at least one returned record did not contain that value; the MCP never presents a partial subtotal as a complete total.",
+          "Intelligent Octopus Go can price the home and EV differently in the same half-hour and limits the off-peak smart-charge allowance to six actual charging hours per midday-to-midday day.",
+          "Intelligent Drive Pack and Power Pack are type-of-use arrangements. Subscription fees, credits, exports, or other account-level adjustments may appear separately from these charge records; use the Octopus statement as the definitive total."
+        ]
+      };
+    })
+  );
+
+  server.registerTool(
     "octopus_get_planned_dispatches",
     {
       title: "Get planned smart dispatches",
@@ -844,8 +1020,10 @@ At startup, an optional anonymous version check reads only the public package ve
 1. Start with \`octopus_connection_status\` and \`octopus_discover_meters\`.
 2. Use \`octopus_get_consumption\` for raw intervals or server-side grouping.
 3. Use \`octopus_analyse_usage\` and \`octopus_compare_usage\` for local calculations.
-4. Use exact tariff codes with rate, cheapest-window, cost, and comparison tools.
-5. Device telemetry, dispatches, Octoplus points, and Octopus quota status use documented read-only GraphQL operations.
+4. Use exact tariff codes with rate, cheapest-window, cost, and comparison tools for conventional tariffs.
+5. Use \`octopus_get_ev_tariff_pricing\` for an account's separate home peak/off-peak and EV peak/off-peak rates.
+6. Use \`octopus_get_ev_charge_costs\` for Intelligent Octopus Go, Charge Cap, Drive Pack, Power Pack, and other device-aware EV charge costs; aggregate meter replay cannot reproduce those rules.
+7. Device telemetry, dispatches, Octoplus points, and Octopus quota status use documented read-only GraphQL operations.
 
 Every Octopus Energy request is queued behind the configured local throttle. Pagination and record counts are capped per tool call, and repeatable responses are cached locally with hashed filenames.
 `;
