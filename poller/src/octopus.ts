@@ -22,6 +22,8 @@ export interface MeterTarget {
   tariff_code: string;
   product_code: string;
   direction: "import" | "export";
+  /** Intelligent Octopus tariffs publish no standard-unit-rates; pricing comes from day/night feeds + dispatches. */
+  isIntelligent: boolean;
 }
 
 interface Paged<T> {
@@ -185,7 +187,8 @@ export class OctopusPollerClient {
           serial_number: meter.serial_number,
           tariff_code: agreement.tariff_code.toUpperCase(),
           product_code,
-          direction: point.is_export ? "export" : "import"
+          direction: point.is_export ? "export" : "import",
+          isIntelligent: product_code.includes("IOG")
         });
       }
     }
@@ -205,6 +208,25 @@ export class OctopusPollerClient {
     url.searchParams.set("period_to", periodTo.toISOString());
     url.searchParams.set("page_size", "1500");
     return this.paginate<RateRecord>(url, false);
+  }
+
+  /**
+   * Unit rates for four-rate EV tariffs (Intelligent Octopus Go).
+   * These tariffs publish nothing on standard-unit-rates; day/night rates live here instead.
+   */
+  async getFourRateUnitRates(
+    target: MeterTarget,
+    kind: "day-unit-rates" | "night-unit-rates" | "ev-device-peak-unit-rates" | "ev-device-off-peak-unit-rates",
+    periodFrom: Date,
+    periodTo: Date
+  ): Promise<RateRecord[]> {
+    const url = this.safeUrl(
+      `products/${encodeURIComponent(target.product_code)}/electricity-tariffs/${encodeURIComponent(target.tariff_code)}/${kind}/`
+    );
+    url.searchParams.set("period_from", periodFrom.toISOString());
+    url.searchParams.set("period_to", periodTo.toISOString());
+    url.searchParams.set("page_size", "1500");
+    return this.paginate<RateRecord>(url, true);
   }
 
   /** Half-hourly meter readings; export MPANs report exported kWh as "consumption". */

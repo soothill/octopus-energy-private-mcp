@@ -6,12 +6,22 @@ A Dockerized poller that records Octopus Agile **import and export prices** (day
 
 | Measurement | Tags | Fields | Meaning |
 |---|---|---|---|
-| `octopus_price` | `site`, `direction` (import/export), `tariff_code` | `value_inc_vat`, `value_exc_vat` | Half-hourly rates, timestamped at `valid_from`. Covers history (backfill) and day-ahead. |
+| `octopus_price` | `site`, `direction` (import/export), `tariff_code`, `source` (tariff/intelligent) | `value_inc_vat`, `value_exc_vat` | Half-hourly rates, timestamped at `valid_from`. Covers history (backfill) and day-ahead. For Intelligent Octopus (IOG) sites the half-hours are synthesised from the day/night unit-rate feeds (`source=intelligent`). |
 | `octopus_consumption` | `site`, `direction`, `mpan` | `kwh` | Half-hourly import/export readings from the smart meter. |
 | `octopus_cost` | `site`, `direction` | `kwh`, `rate_inc_vat`, `cost_inc_vat_pence` / `revenue_inc_vat_pence` | Each interval matched to its rate (Octopus half-to-even 0.01 kWh rounding). |
 | `octopus_battery_signal` | `site`, `action` (export/import) | `import_pence`, `export_pence`, `spread_pence` | Per future half-hour: `spread = export − import`. Positive spread ⇒ discharge/export beats charging. |
 | `octopus_battery_plan` | `site`, `day` | `profitable_export_half_hours`, `potential_margin_p_per_kwh`, `best_export_1..4_unix`, `cheapest_import_1..4_unix`, `min_import_pence`, `max_export_pence` | Daily arbitrage summary for the forward window. |
+| `octopus_intelligent_dispatch` | `site`, `device_id`, `device_type`, `status` (planned/completed), `dispatch_type` | `energy_kwh`, `duration_minutes` | Intelligent Octopus (SmartFlex) dispatch windows from the Kraken GraphQL API: planned slots per device (~24h ahead) and completed slots for the account (~12h behind). |
 | `octopus_poll_status` | `site`, `task` | `ok`, `records` | Liveness marker per poll. |
+
+## Intelligent Octopus (IOG) sites
+
+IOG tariffs publish nothing on the standard REST rate feeds. For sites whose import tariff contains `IOG`, the poller automatically:
+
+1. **Synthesises half-hourly prices** from the tariff's `day-unit-rates` / `night-unit-rates` feeds — the off-peak window (23:30–05:30 local) gets the night rate, everything else the day rate — and writes them to `octopus_price` with `source=intelligent`. Costs are matched against these rates like any other tariff.
+2. **Logs SmartFlex dispatch windows** via the Kraken GraphQL API (`api.oegb-kraken.energy`): the API key is exchanged for a short-lived JWT, then `flexPlannedDispatches` (per device, ~24h ahead) and `completedDispatches` (per account, ~12h behind) are written to `octopus_intelligent_dispatch`.
+
+No extra configuration is needed — detection is by tariff code.
 
 ## How the arbitrage signal works
 

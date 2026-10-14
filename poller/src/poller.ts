@@ -2,6 +2,7 @@ import { DateTime } from "luxon";
 import type { PollerConfig } from "./config.js";
 import { InfluxWriter, type Point } from "./influx.js";
 import { OctopusPollerClient, type MeterTarget, type RateRecord } from "./octopus.js";
+import { IntelligentGraphqlClient, type IntelligentDevice } from "./intelligent.js";
 
 function log(message: string): void {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -33,12 +34,19 @@ function toUnixSeconds(iso: string): number {
   return Math.floor(Date.parse(iso) / 1000);
 }
 
-function ratePoints(prefix: string, site: string, direction: string, tariffCode: string, rates: RateRecord[]): Point[] {
+function ratePoints(
+  prefix: string,
+  site: string,
+  direction: string,
+  tariffCode: string,
+  rates: RateRecord[],
+  source: "tariff" | "intelligent" = "tariff"
+): Point[] {
   return rates
     .filter((rate) => rate.valid_to)
     .map((rate) => ({
       measurement: `${prefix}price`,
-      tags: { site, direction, tariff_code: tariffCode },
+      tags: { site, direction, tariff_code: tariffCode, source },
       fields: { value_inc_vat: rate.value_inc_vat, value_exc_vat: rate.value_exc_vat },
       timestamp: toUnixSeconds(rate.valid_from)
     }));
@@ -112,6 +120,9 @@ function batteryPlanPoint(prefix: string, site: string, pairs: HalfHourPair[], t
 export class SitePoller {
   private targets: MeterTarget[] | null = null;
   private lastConsumptionSuccess: Date | null = null;
+  private intelligentClient: IntelligentGraphqlClient | null = null;
+  private intelligentDevices: IntelligentDevice[] | null = null;
+  private iogRates: { day: RateRecord[]; night: RateRecord[]; fetchedAt: number } | null = null;
 
   constructor(
     private readonly config: PollerConfig,
@@ -137,15 +148,120 @@ export class SitePoller {
     return { importTarget, exportTarget };
   }
 
+  /**
+   * Intelligent Octopus tariffs publish no half-hourly rates; the off-peak window
+   * (23:30–05:30 local) bills at the night rate and everything else at the day rate.
+   * Synthesise half-hourly RateRecords so price/cost logging matches Agile sites.
+   */
+  private async syntheticIogRates(importTarget: MeterTarget, from: Date, to: Date): Promise<RateRecord[]> {
+    if (!this.iogRates || Date.now() - this.iogRates.fetchedAt > 12 * 3_600_000) {
+      const wideFrom = new Date(Date.now() - 400 * 86_400_000);
+      const wideTo = new Date(Date.now() + 10 * 86_400_000);
+      const [day, night] = await Promise.all([
+        this.client.getFourRateUnitRates(importTarget, "day-unit-rates", wideFrom, wideTo),
+        this.client.getFourRateUnitRates(importTarget, "night-unit-rates", wideFrom, wideTo)
+      ]);
+      this.iogRates = { day, night, fetchedAt: Date.now() };
+    }
+    const { day, night } = this.iogRates;
+    const slotMs = 1_800_000;
+    const start = Math.floor(from.getTime() / slotMs) * slotMs;
+    const slots: RateRecord[] = [];
+    for (let at = start; at < to.getTime(); at += slotMs) {
+      const local = DateTime.fromMillis(at, { zone: this.config.timezone });
+      const minuteOfDay = local.hour * 60 + local.minute;
+      const isNight = minuteOfDay >= 23 * 60 + 30 || minuteOfDay < 5 * 60 + 30;
+      const rate = rateAt(isNight ? night : day, at);
+      if (!rate) continue;
+      slots.push({
+        valid_from: new Date(at).toISOString(),
+        valid_to: new Date(at + slotMs).toISOString(),
+        value_inc_vat: rate.value_inc_vat,
+        value_exc_vat: rate.value_exc_vat
+      });
+    }
+    return slots;
+  }
+
+  /** Rates for a target: REST rate feed, or synthesised day/night windows for Intelligent tariffs. */
+  private async effectiveRates(
+    target: MeterTarget,
+    from: Date,
+    to: Date
+  ): Promise<{ rates: RateRecord[]; source: "tariff" | "intelligent" }> {
+    if (target.isIntelligent && target.direction === "import") {
+      return { rates: await this.syntheticIogRates(target, from, to), source: "intelligent" };
+    }
+    return { rates: await this.client.getRates(target, from, to), source: "tariff" };
+  }
+
+  /** Log Intelligent Octopus dispatch windows: planned per SmartFlex device, completed per account. */
+  private async pollIntelligentDispatches(): Promise<Point[]> {
+    this.intelligentClient ??= new IntelligentGraphqlClient(this.site, {
+      timeoutMs: this.config.requestTimeoutMs,
+      maxRetries: this.config.maxRetries,
+      minRequestIntervalMs: this.config.minRequestIntervalMs
+    });
+    if (!this.intelligentDevices) this.intelligentDevices = await this.intelligentClient.listDevices();
+    const points: Point[] = [];
+    let plannedCount = 0;
+    for (const device of this.intelligentDevices) {
+      const planned = await this.intelligentClient.plannedDispatches(device.id);
+      plannedCount += planned.length;
+      for (const dispatch of planned) {
+        points.push({
+          measurement: `${this.config.measurementPrefix}intelligent_dispatch`,
+          tags: {
+            site: this.site.slug,
+            device_id: device.id,
+            device_type: device.deviceType,
+            status: "planned",
+            dispatch_type: dispatch.type
+          },
+          fields: {
+            energy_kwh: Number(dispatch.energyAddedKwh ?? 0),
+            duration_minutes: Math.round((Date.parse(dispatch.end) - Date.parse(dispatch.start)) / 60_000)
+          },
+          timestamp: toUnixSeconds(dispatch.start)
+        });
+      }
+    }
+    const completed = await this.intelligentClient.completedDispatches();
+    for (const dispatch of completed) {
+      points.push({
+        measurement: `${this.config.measurementPrefix}intelligent_dispatch`,
+        tags: {
+          site: this.site.slug,
+          status: "completed",
+          dispatch_type: dispatch.meta?.source ?? "unknown"
+        },
+        fields: {
+          energy_kwh: Number(dispatch.delta ?? 0),
+          duration_minutes: Math.round((Date.parse(dispatch.end) - Date.parse(dispatch.start)) / 60_000)
+        },
+        timestamp: toUnixSeconds(dispatch.start)
+      });
+    }
+    log(`${this.site.name}: ${plannedCount} planned + ${completed.length} completed intelligent dispatches`);
+    return points;
+  }
+
   /** Fetch import + export rates (history and day-ahead), write prices and arbitrage signals. */
   async pollPrices(): Promise<void> {
     const { importTarget, exportTarget } = await this.targetsFresh();
     const now = Date.now();
     const from = new Date(now - this.config.backfillDays * 86_400_000);
     const to = new Date(now + this.config.lookaheadDays * 86_400_000);
-    const importRates = await this.client.getRates(importTarget, from, to);
-    const points: Point[] = ratePoints(this.config.measurementPrefix, this.site.slug, "import", importTarget.tariff_code, importRates);
-    log(`${this.site.name}: ${importRates.length} import rates (${importTarget.tariff_code})`);
+    const { rates: importRates, source: importSource } = await this.effectiveRates(importTarget, from, to);
+    const points: Point[] = ratePoints(
+      this.config.measurementPrefix,
+      this.site.slug,
+      "import",
+      importTarget.tariff_code,
+      importRates,
+      importSource
+    );
+    log(`${this.site.name}: ${importRates.length} import rates (${importTarget.tariff_code}${importSource === "intelligent" ? ", intelligent day/night" : ""})`);
 
     if (exportTarget) {
       const exportRates = await this.client.getRates(exportTarget, from, to);
@@ -159,6 +275,13 @@ export class SitePoller {
       log(`${this.site.name}: ${pairs.length} forward half-hours priced, ${positive} with positive export spread`);
     } else {
       log(`${this.site.name}: no export meter discovered; skipping export prices`);
+    }
+    if (importTarget.isIntelligent) {
+      try {
+        points.push(...(await this.pollIntelligentDispatches()));
+      } catch (error) {
+        log(`${this.site.name}: intelligent dispatch poll failed: ${error instanceof Error ? error.message : error}`);
+      }
     }
     points.push({
       measurement: `${this.config.measurementPrefix}poll_status`,
@@ -185,7 +308,7 @@ export class SitePoller {
     ];
     for (const job of jobs) {
       const records = await this.client.getConsumption(job.target, from, to);
-      const rates = await this.client.getRates(job.target, from, new Date(now + 86_400_000));
+      const { rates } = await this.effectiveRates(job.target, from, new Date(now + 86_400_000));
       let costPence = 0;
       for (const record of records) {
         const at = Date.parse(record.interval_start);
