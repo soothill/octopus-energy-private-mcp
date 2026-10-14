@@ -22,6 +22,8 @@ export interface PollerConfig {
   requestTimeoutMs: number;
   maxRetries: number;
   measurementPrefix: string;
+  marketImportProducts: string[];
+  marketExportProducts: string[];
 }
 
 function env(name: string): string | undefined {
@@ -100,6 +102,14 @@ export function loadPollerConfig(): PollerConfig {
     minRequestIntervalMs: integerEnv("POLL_MIN_REQUEST_INTERVAL_MS", 1000, 100, 60_000),
     requestTimeoutMs: integerEnv("POLL_REQUEST_TIMEOUT_MS", 20_000, 1000, 120_000),
     maxRetries: integerEnv("POLL_MAX_RETRIES", 3, 0, 8),
-    measurementPrefix: env("INFLUX_MEASUREMENT_PREFIX") ?? "octopus_"
+    measurementPrefix: env("INFLUX_MEASUREMENT_PREFIX") ?? "octopus_",
+    marketImportProducts: (env("POLL_MARKET_IMPORT_PRODUCTS") ?? "AGILE-24-10-01")
+      .split(",")
+      .map((product) => product.trim().toUpperCase())
+      .filter(Boolean),
+    marketExportProducts: (env("POLL_MARKET_EXPORT_PRODUCTS") ?? "AGILE-OUTGOING-19-05-13,OUTGOING-VAR-24-10-26,OUTGOING-PRIME-FIX-12M-26-06-23")
+      .split(",")
+      .map((product) => product.trim().toUpperCase())
+      .filter(Boolean)
   };
 }

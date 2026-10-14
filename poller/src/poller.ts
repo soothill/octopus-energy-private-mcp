@@ -1,7 +1,7 @@
 import { DateTime } from "luxon";
 import type { PollerConfig } from "./config.js";
 import { InfluxWriter, type Point } from "./influx.js";
-import { OctopusPollerClient, type MeterTarget, type RateRecord } from "./octopus.js";
+import { OctopusPollerClient, regionLetterFromTariff, type MeterTarget, type RateRecord } from "./octopus.js";
 import { IntelligentGraphqlClient, type IntelligentDevice } from "./intelligent.js";
 
 function log(message: string): void {
@@ -40,16 +40,15 @@ function ratePoints(
   direction: string,
   tariffCode: string,
   rates: RateRecord[],
-  source: "tariff" | "intelligent" = "tariff"
+  source: "tariff" | "intelligent" | "market" = "tariff"
 ): Point[] {
-  return rates
-    .filter((rate) => rate.valid_to)
-    .map((rate) => ({
-      measurement: `${prefix}price`,
-      tags: { site, direction, tariff_code: tariffCode, source },
-      fields: { value_inc_vat: rate.value_inc_vat, value_exc_vat: rate.value_exc_vat },
-      timestamp: toUnixSeconds(rate.valid_from)
-    }));
+  // Rates with valid_to=null are open-ended flat rates (e.g. Outgoing Octopus) — keep them.
+  return rates.map((rate) => ({
+    measurement: `${prefix}price`,
+    tags: { site, direction, tariff_code: tariffCode, source },
+    fields: { value_inc_vat: rate.value_inc_vat, value_exc_vat: rate.value_exc_vat },
+    timestamp: toUnixSeconds(rate.valid_from)
+  }));
 }
 
 interface HalfHourPair {
@@ -244,6 +243,48 @@ export class SitePoller {
     }
     log(`${this.site.name}: ${plannedCount} planned + ${completed.length} completed intelligent dispatches`);
     return points;
+  }
+
+  /**
+   * Day-ahead Agile market prices for this site's region (import + export), written to
+   * octopus_market_price so tariffs can be compared ("would Agile beat my current tariff?").
+   * The region letter is derived from the site's own tariff code (e.g. -F Yorkshire, -B Eastern).
+   */
+  async pollMarketPrices(): Promise<void> {
+    const { importTarget } = await this.targetsFresh();
+    const region = regionLetterFromTariff(importTarget.tariff_code);
+    if (!region) {
+      log(`${this.site.name}: cannot derive region from ${importTarget.tariff_code}; skipping market prices`);
+      return;
+    }
+    const now = Date.now();
+    const from = new Date(now - this.config.backfillDays * 86_400_000);
+    const to = new Date(now + this.config.lookaheadDays * 86_400_000);
+    const jobs: Array<{ product: string; direction: "import" | "export" }> = [
+      ...this.config.marketImportProducts.map((product) => ({ product, direction: "import" as const })),
+      ...this.config.marketExportProducts.map((product) => ({ product, direction: "export" as const }))
+    ];
+    const points: Point[] = [];
+    for (const job of jobs) {
+      const tariffCode = `E-1R-${job.product}-${region}`;
+      try {
+        const rates = await this.client.getTariffRates(job.product, tariffCode, from, to);
+        points.push(
+          ...ratePoints(this.config.measurementPrefix, this.site.slug, job.direction, tariffCode, rates, "market")
+        );
+        log(`${this.site.name}: ${rates.length} market ${job.direction} rates (${tariffCode}, region ${region})`);
+      } catch (error) {
+        log(`${this.site.name}: market ${job.direction} rates failed for ${tariffCode}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+    if (points.length > 0) {
+      points.push({
+        measurement: `${this.config.measurementPrefix}poll_status`,
+        tags: { site: this.site.slug, task: "market_prices" },
+        fields: { ok: 1, records: points.length }
+      });
+      await this.influx.write(points);
+    }
   }
 
   /** Fetch import + export rates (history and day-ahead), write prices and arbitrage signals. */

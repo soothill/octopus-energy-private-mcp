@@ -10,7 +10,12 @@ function log(message: string): void {
 async function runCycle(pollers: SitePoller[], label: string): Promise<void> {
   for (const poller of pollers) {
     try {
-      await (label === "prices" ? poller.pollPrices() : poller.pollConsumption());
+      if (label === "prices") {
+        await poller.pollPrices();
+        await poller.pollMarketPrices();
+      } else {
+        await poller.pollConsumption();
+      }
     } catch (error) {
       log(`${label} poll failed: ${error instanceof Error ? error.message : error}`);
     }

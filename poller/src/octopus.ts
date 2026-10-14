@@ -56,6 +56,12 @@ export function productCodeFromTariff(tariffCode: string): string {
   return match[1];
 }
 
+/** Region letter (e.g. "B" for Eastern, "F" for Yorkshire) from a full tariff code. */
+export function regionLetterFromTariff(tariffCode: string): string | null {
+  const match = tariffCode.trim().toUpperCase().match(/^[EG]-\dR-(.+)-([A-Z])$/);
+  return match?.[2] ?? null;
+}
+
 function activeAgreement(agreements: Agreement[], now: number): Agreement | null {
   return agreements.find(
     (agreement) =>
@@ -200,9 +206,14 @@ export class OctopusPollerClient {
 
   /** Half-hourly unit rates for a tariff over a window (works past, present and day-ahead). */
   async getRates(target: MeterTarget, periodFrom: Date, periodTo: Date): Promise<RateRecord[]> {
-    const tariffType = target.tariff_code.startsWith("E-") ? "electricity-tariffs" : "gas-tariffs";
+    return this.getTariffRates(target.product_code, target.tariff_code, periodFrom, periodTo);
+  }
+
+  /** Rates for any product/tariff code (public feed, no auth) — used for market tariff comparisons. */
+  async getTariffRates(productCode: string, tariffCode: string, periodFrom: Date, periodTo: Date): Promise<RateRecord[]> {
+    const tariffType = tariffCode.startsWith("E-") ? "electricity-tariffs" : "gas-tariffs";
     const url = this.safeUrl(
-      `products/${encodeURIComponent(target.product_code)}/${tariffType}/${encodeURIComponent(target.tariff_code)}/standard-unit-rates/`
+      `products/${encodeURIComponent(productCode)}/${tariffType}/${encodeURIComponent(tariffCode)}/standard-unit-rates/`
     );
     url.searchParams.set("period_from", periodFrom.toISOString());
     url.searchParams.set("period_to", periodTo.toISOString());
