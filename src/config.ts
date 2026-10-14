@@ -6,9 +6,21 @@ export const OCTOPUS_REST_ORIGIN = "https://api.octopus.energy";
 export const OCTOPUS_REST_BASE_URL = `${OCTOPUS_REST_ORIGIN}/v1/`;
 export const OCTOPUS_GRAPHQL_URL = `${OCTOPUS_REST_ORIGIN}/v1/graphql/`;
 
+export interface SiteConfig {
+  slug: string;
+  name: string;
+  apiKey: string | undefined;
+  accountNumber: string | undefined;
+  smartMeterDeviceId: string | undefined;
+  smartFlexDeviceId: string | undefined;
+}
+
 export interface ServerConfig {
   apiKey: string | undefined;
   accountNumber: string | undefined;
+  sites: SiteConfig[];
+  defaultSite: string;
+  siteId: string;
   smartMeterDeviceId: string | undefined;
   smartFlexDeviceId: string | undefined;
   timezone: string;
@@ -75,12 +87,89 @@ function gasUnitEnv(): GasConsumptionUnit {
   throw new Error("OCTOPUS_GAS_CONSUMPTION_UNIT must be auto, kwh, or m3");
 }
 
-export function loadConfig(): ServerConfig {
+export function siteSlug(value: string): string {
+  const slug = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!slug) throw new Error(`Invalid site name "${value}"`);
+  return slug;
+}
+
+function siteEnvSuffix(slug: string): string {
+  return slug.replace(/-/g, "_").toUpperCase();
+}
+
+function siteFromEnv(slug: string, fallbackName: string): SiteConfig {
+  const prefix = `OCTOPUS_SITE_${siteEnvSuffix(slug)}_`;
+  const accountNumber = optionalEnv(`${prefix}ACCOUNT_NUMBER`);
+  if (accountNumber !== undefined) validateAccountNumber(accountNumber);
   return {
-    apiKey: optionalEnv("OCTOPUS_API_KEY"),
-    accountNumber: validateAccountNumber(optionalEnv("OCTOPUS_ACCOUNT_NUMBER")),
+    slug,
+    name: optionalEnv(`${prefix}NAME`) ?? fallbackName,
+    apiKey: optionalEnv(`${prefix}API_KEY`),
+    accountNumber,
+    smartMeterDeviceId: optionalEnv(`${prefix}SMART_METER_DEVICE_ID`),
+    smartFlexDeviceId: optionalEnv(`${prefix}SMART_FLEX_DEVICE_ID`)
+  };
+}
+
+export function loadSites(): { sites: SiteConfig[]; defaultSite: string } {
+  const legacyApiKey = optionalEnv("OCTOPUS_API_KEY");
+  const legacyAccount = validateAccountNumber(optionalEnv("OCTOPUS_ACCOUNT_NUMBER"));
+  const legacySite: SiteConfig = {
+    slug: "default",
+    name: "default",
+    apiKey: legacyApiKey,
+    accountNumber: legacyAccount,
     smartMeterDeviceId: optionalEnv("OCTOPUS_SMART_METER_DEVICE_ID"),
-    smartFlexDeviceId: optionalEnv("OCTOPUS_SMART_FLEX_DEVICE_ID"),
+    smartFlexDeviceId: optionalEnv("OCTOPUS_SMART_FLEX_DEVICE_ID")
+  };
+  const list = optionalEnv("OCTOPUS_SITES");
+  if (!list) return { sites: [legacySite], defaultSite: "default" };
+
+  const slugs = list.split(",").map((entry) => siteSlug(entry)).filter(Boolean);
+  if (slugs.length === 0) throw new Error("OCTOPUS_SITES must list at least one site name");
+  const duplicates = slugs.filter((slug, index) => slugs.indexOf(slug) !== index);
+  if (duplicates.length > 0) {
+    throw new Error(`OCTOPUS_SITES contains duplicate site names: ${[...new Set(duplicates)].join(", ")}`);
+  }
+  const sites = slugs.map((slug) => siteFromEnv(slug, slug));
+  const requested = optionalEnv("OCTOPUS_DEFAULT_SITE");
+  let defaultSite: string;
+  if (requested) {
+    defaultSite = siteSlug(requested);
+    if (!sites.some((site) => site.slug === defaultSite)) {
+      throw new Error(`OCTOPUS_DEFAULT_SITE "${requested}" is not listed in OCTOPUS_SITES`);
+    }
+  } else {
+    defaultSite = sites[0]!.slug;
+  }
+  if (sites.length === 1 && !sites[0]!.apiKey && !sites[0]!.accountNumber) {
+    sites[0] = { ...sites[0]!, ...legacySite, slug: sites[0]!.slug, name: sites[0]!.name };
+  }
+  return { sites, defaultSite };
+}
+
+export function siteConfigFor(config: ServerConfig, site: SiteConfig): ServerConfig {
+  return {
+    ...config,
+    siteId: site.slug,
+    apiKey: site.apiKey,
+    accountNumber: site.accountNumber,
+    smartMeterDeviceId: site.smartMeterDeviceId,
+    smartFlexDeviceId: site.smartFlexDeviceId
+  };
+}
+
+export function loadConfig(): ServerConfig {
+  const { sites, defaultSite } = loadSites();
+  const defaultEntry = sites.find((site) => site.slug === defaultSite) ?? sites[0]!;
+  return {
+    apiKey: defaultEntry.apiKey,
+    accountNumber: defaultEntry.accountNumber,
+    sites,
+    defaultSite,
+    siteId: defaultEntry.slug,
+    smartMeterDeviceId: defaultEntry.smartMeterDeviceId,
+    smartFlexDeviceId: defaultEntry.smartFlexDeviceId,
     timezone: optionalEnv("OCTOPUS_TIMEZONE") ?? "Europe/London",
     cacheDir:
       optionalEnv("OCTOPUS_CACHE_DIR") ?? join(homedir(), ".cache", "octopus-energy-mcp"),
@@ -103,6 +192,16 @@ export function publicConfig(config: ServerConfig): Record<string, unknown> {
   return {
     account_configured: Boolean(config.accountNumber),
     api_key_configured: Boolean(config.apiKey),
+    default_site: config.defaultSite,
+    sites: config.sites.map((site) => ({
+      name: site.name,
+      slug: site.slug,
+      is_default: site.slug === config.defaultSite,
+      account_configured: Boolean(site.accountNumber),
+      api_key_configured: Boolean(site.apiKey),
+      smart_meter_device_configured: Boolean(site.smartMeterDeviceId),
+      smart_flex_device_configured: Boolean(site.smartFlexDeviceId)
+    })),
     smart_meter_device_configured: Boolean(config.smartMeterDeviceId),
     smart_flex_device_configured: Boolean(config.smartFlexDeviceId),
     timezone: config.timezone,

@@ -13,6 +13,7 @@ import {
 } from "./octopus-client.js";
 import { PERIOD_ALIASES, previousEquivalentPeriod, resolvePeriod } from "./periods.js";
 import { RequestRateLimiter } from "./rate-limiter.js";
+import { SiteRegistry } from "./sites.js";
 import { formatUpdateNotice, notCheckedUpdateStatus, type UpdateStatus } from "./update-check.js";
 import { CURRENT_VERSION } from "./version.js";
 import type {
@@ -219,6 +220,7 @@ export interface ServerDependencies {
   limiter?: RequestRateLimiter;
   rest?: OctopusRestClient;
   graphql?: OctopusGraphQlClient;
+  sites?: SiteRegistry;
   updateStatus?: UpdateStatus;
 }
 
@@ -227,6 +229,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
   const limiter = dependencies.limiter ?? new RequestRateLimiter(config.requestsPerMinute, config.minRequestIntervalMs);
   const rest = dependencies.rest ?? new OctopusRestClient(config, cache, limiter);
   const graphql = dependencies.graphql ?? new OctopusGraphQlClient(config, cache, limiter);
+  const registry =
+    dependencies.sites ??
+    new SiteRegistry(config, { cache, limiter, rest, graphql });
+  const defaultRuntime = registry.defaultRuntime;
   const updateStatus = dependencies.updateStatus ?? notCheckedUpdateStatus(CURRENT_VERSION);
   const updateNotice = formatUpdateNotice(updateStatus);
   const server = new McpServer(
@@ -234,18 +240,24 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       capabilities: { tools: {}, resources: {}, prompts: {} },
       instructions:
-        "Privacy-first, read-only Octopus Energy access. Start with octopus_connection_status and octopus_discover_meters. Prefer named periods and local analysis tools; use exact tariff codes for conventional costs, octopus_get_ev_tariff_pricing for device-aware EV rates, and octopus_get_ev_charge_costs for device-aware EV charge history. Respect truncated flags and unit/cost warnings. Requests are locally throttled and cached. Credentials may only be sent to api.octopus.energy; never ask the user to paste them into chat. octopus_clear_cache only deletes local response files and requires confirm=true." +
+        "Privacy-first, read-only Octopus Energy access. Start with octopus_connection_status and octopus_discover_meters. Multiple sites may be configured; pass the site parameter (for example site=\"York\") on account, consumption, EV and smart-device tools, or omit it to use the default site. Use octopus_list_sites to see configured sites. Prefer named periods and local analysis tools; use exact tariff codes for conventional costs, octopus_get_ev_tariff_pricing for device-aware EV rates, and octopus_get_ev_charge_costs for device-aware EV charge history. Respect truncated flags and unit/cost warnings. Requests are locally throttled and cached. Credentials may only be sent to api.octopus.energy; never ask the user to paste them into chat. octopus_clear_cache only deletes local response files and requires confirm=true." +
         (updateNotice ? ` IMPORTANT: Tell the user about this update before using other tools. ${updateNotice}` : "")
     }
   );
 
+  const siteField = {
+    site: z.string().optional().describe(
+      `Friendly site name or slug (for example "York"); defaults to the configured default site "${config.defaultSite}"`
+    )
+  };
+
   const consumptionFor = async (
-    args: PeriodLike & MeterLike & { group_by?: "half_hour" | "day" | "week" | "month" | "quarter" },
+    args: PeriodLike & MeterLike & { site?: string; group_by?: "half_hour" | "day" | "week" | "month" | "quarter" },
     rangeOverride?: PeriodRange
   ) => {
     const range = rangeOverride ?? resolvePeriod(args, config.timezone);
-    const { group_by, ...selection } = args;
-    const result = await rest.getConsumption({
+    const { group_by, site, ...selection } = args;
+    const result = await registry.resolve(site).rest.getConsumption({
       ...selection,
       period_from: range.from,
       period_to: range.to,
@@ -263,7 +275,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       annotations: { ...readOnly, openWorldHint: false }
     },
     safe(async () => ({
-      ready_for_account_queries: Boolean(config.apiKey && config.accountNumber),
+      ready_for_account_queries: Boolean(defaultRuntime.config.apiKey && defaultRuntime.config.accountNumber),
       configuration: publicConfig(config),
       update: updateStatus,
       cache: await cache.stats(),
@@ -282,18 +294,40 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
   );
 
   server.registerTool(
+    "octopus_list_sites",
+    {
+      title: "List configured sites",
+      description: "List the friendly site names, slugs, default flag and configuration status for each configured Octopus account. Never returns credentials.",
+      inputSchema: z.object({}),
+      annotations: { ...readOnly, openWorldHint: false }
+    },
+    safe(async () => ({
+      default_site: config.defaultSite,
+      sites: registry.list().map((site) => ({
+        name: site.name,
+        slug: site.slug,
+        is_default: site.slug === config.defaultSite,
+        account_configured: Boolean(site.accountNumber),
+        api_key_configured: Boolean(site.apiKey)
+      })),
+      usage: 'Pass site="<name or slug>" on account tools; omit site to use the default site.'
+    }))
+  );
+
+  server.registerTool(
     "octopus_get_account",
     {
       title: "Get Octopus account",
       description: "Fetch properties, meter points, meters and tariff agreements. Addresses are omitted unless explicitly requested.",
       inputSchema: z.object({
         account_number: z.string().optional(),
+        ...siteField,
         include_addresses: z.boolean().default(false)
       }),
       annotations: readOnly
     },
-    safe(async ({ account_number, include_addresses }) => {
-      const account = await rest.getAccount(account_number);
+    safe(async ({ account_number, site, include_addresses }) => {
+      const account = await registry.resolve(site).rest.getAccount(account_number);
       return include_addresses ? account : redactAccountAddresses(account);
     })
   );
@@ -303,10 +337,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       title: "Discover meters and tariffs",
       description: "List electricity import/export and gas meters, their meter points and current tariff agreements.",
-      inputSchema: z.object({ account_number: z.string().optional() }),
+      inputSchema: z.object({ account_number: z.string().optional(), ...siteField }),
       annotations: readOnly
     },
-    safe(async ({ account_number }) => ({ meters: await rest.discoverMeters(account_number) }))
+    safe(async ({ account_number, site }) => ({ meters: await registry.resolve(site).rest.discoverMeters(account_number) }))
   );
 
   server.registerTool(
@@ -346,6 +380,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       inputSchema: z.object({
         ...periodFields,
         ...meterFields,
+        ...siteField,
         group_by: z.enum(["half_hour", "day", "week", "month", "quarter"]).default("half_hour")
       }),
       annotations: readOnly
@@ -361,6 +396,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       inputSchema: z.object({
         ...periodFields,
         ...meterFields,
+        ...siteField,
         gas_unit: gasUnitField
       }),
       annotations: readOnly
@@ -400,6 +436,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
         comparison_from: z.string().optional(),
         comparison_to: z.string().optional(),
         ...meterFields,
+        ...siteField,
         gas_unit: gasUnitField
       }),
       annotations: readOnly
@@ -598,6 +635,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
   const costInput = z.object({
     ...periodFields,
     ...meterFields,
+    ...siteField,
     gas_unit: gasUnitField,
     tariff_fuel: z.enum(["electricity", "gas"]).optional(),
     tariff_code: z.string().min(1),
@@ -685,6 +723,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       inputSchema: z.object({
         ...periodFields,
         ...meterFields,
+        ...siteField,
         gas_unit: gasUnitField,
         tariffs: z.array(z.object({
           label: z.string().optional(),
@@ -734,10 +773,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       title: "Get SmartFlex devices",
       description: "Use Octopus's read-only GraphQL API to list registered EV, battery, heat-pump and other SmartFlex devices.",
-      inputSchema: z.object({ account_number: z.string().optional() }),
+      inputSchema: z.object({ account_number: z.string().optional(), ...siteField }),
       annotations: readOnly
     },
-    safe(async ({ account_number }) => graphql.getDevices(account_number))
+    safe(async ({ account_number, site }) => registry.resolve(site).graphql.getDevices(account_number))
   );
 
   server.registerTool(
@@ -745,10 +784,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       title: "Get smart meter devices",
       description: "Discover SMETS2 Home Area Networks and ESME/GSME device IDs suitable for the telemetry tool.",
-      inputSchema: z.object({ account_number: z.string().optional() }),
+      inputSchema: z.object({ account_number: z.string().optional(), ...siteField }),
       annotations: readOnly
     },
-    safe(async ({ account_number }) => graphql.getSmartMeterDevices(account_number))
+    safe(async ({ account_number, site }) => registry.resolve(site).graphql.getSmartMeterDevices(account_number))
   );
 
   server.registerTool(
@@ -758,6 +797,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       description: "Read live/recent smart meter telemetry through Octopus GraphQL. This can be subject to a field-specific Octopus limit.",
       inputSchema: z.object({
         device_id: z.string().optional(),
+        ...siteField,
         ...periodFields,
         grouping: z.enum(["TEN_SECONDS", "ONE_MINUTE", "FIVE_MINUTES", "HALF_HOURLY", "HOURLY"])
           .default("FIVE_MINUTES")
@@ -765,12 +805,13 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       annotations: readOnly
     },
     safe(async (args) => {
+      const runtime = registry.resolve(args.site);
       const ranged = Boolean(args.period || args.period_from || args.period_to);
       const range = ranged ? resolvePeriod(args, config.timezone) : null;
       return {
         requested_period: range,
         mode: range ? "range" : "latest",
-        data: await graphql.getSmartMeterTelemetry({
+        data: await runtime.graphql.getSmartMeterTelemetry({
           ...(args.device_id ? { deviceId: args.device_id } : {}),
           ...(range ? { start: range.from, end: range.to, grouping: args.grouping } : {})
         })
@@ -783,10 +824,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       title: "Get completed smart dispatches",
       description: "Read completed Intelligent Octopus/smart-flex dispatch records through Octopus GraphQL.",
-      inputSchema: z.object({ account_number: z.string().optional() }),
+      inputSchema: z.object({ account_number: z.string().optional(), ...siteField }),
       annotations: readOnly
     },
-    safe(async ({ account_number }) => graphql.getCompletedDispatches(account_number))
+    safe(async ({ account_number, site }) => registry.resolve(site).graphql.getCompletedDispatches(account_number))
   );
 
   server.registerTool(
@@ -794,11 +835,11 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       title: "Get active four-rate EV tariff pricing",
       description: "Return the separate home peak/off-peak and EV peak/off-peak prices for active four-rate Intelligent Octopus Go agreements. Prices come from the authenticated Octopus account.",
-      inputSchema: z.object({ account_number: z.string().optional() }),
+      inputSchema: z.object({ account_number: z.string().optional(), ...siteField }),
       annotations: readOnly
     },
-    safe(async ({ account_number }) => {
-      const data = await graphql.getEvTariffPricing(account_number);
+    safe(async ({ account_number, site }) => {
+      const data = await registry.resolve(site).graphql.getEvTariffPricing(account_number);
       return {
         pricing_source: "Octopus Energy account FourRateEvTariff",
         pricing_model: "four_rate_ev_tariff",
@@ -850,15 +891,17 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       description: "Return Octopus account-priced EV charging consumption and costs. Use this for Intelligent Octopus Go four-rate/Charge Cap pricing and type-of-use EV arrangements instead of replaying aggregate meter rates.",
       inputSchema: z.object({
         account_number: z.string().optional(),
+        ...siteField,
         ...periodFields,
         frequency: z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]).default("DAILY")
       }),
       annotations: readOnly
     },
     safe(async (args) => {
+      const runtime = registry.resolve(args.site);
       const range = resolvePeriod(args, config.timezone);
       const dates = evChargeDateRange(range, config.timezone);
-      const data = await graphql.getEvChargeCosts({
+      const data = await runtime.graphql.getEvChargeCosts({
         ...(args.account_number ? { accountNumber: args.account_number } : {}),
         frequency: args.frequency,
         startDate: dates.start_date,
@@ -896,10 +939,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       title: "Get planned smart dispatches",
       description: "Read planned dispatches for a configured or explicitly supplied smart-flex device.",
-      inputSchema: z.object({ device_id: z.string().optional() }),
+      inputSchema: z.object({ device_id: z.string().optional(), ...siteField }),
       annotations: readOnly
     },
-    safe(async ({ device_id }) => graphql.getFlexPlannedDispatches(device_id))
+    safe(async ({ device_id, site }) => registry.resolve(site).graphql.getFlexPlannedDispatches(device_id))
   );
 
   server.registerTool(
@@ -907,10 +950,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       title: "Get Octoplus balance",
       description: "Read Octoplus loyalty points and their monetary value through Octopus GraphQL.",
-      inputSchema: z.object({ account_number: z.string().optional() }),
+      inputSchema: z.object({ account_number: z.string().optional(), ...siteField }),
       annotations: readOnly
     },
-    safe(async ({ account_number }) => graphql.getLoyaltyPointsBalance(account_number))
+    safe(async ({ account_number, site }) => registry.resolve(site).graphql.getLoyaltyPointsBalance(account_number))
   );
 
   server.registerTool(
@@ -918,10 +961,17 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       title: "Get API rate-limit status",
       description: "Return both this server's local throttle status and Octopus GraphQL's reported points/field limits.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({ ...siteField }),
       annotations: readOnly
     },
-    safe(async () => ({ local: limiter.snapshot(), octopus_graphql: await graphql.getRateLimitInfo() }))
+    safe(async ({ site }) => {
+      const runtime = registry.resolve(site);
+      return {
+        site: runtime.site.name,
+        local: runtime.limiter.snapshot(),
+        octopus_graphql: await runtime.graphql.getRateLimitInfo()
+      };
+    })
   );
 
   server.registerTool(
@@ -1017,6 +1067,7 @@ const CAPABILITIES_GUIDE = `# Octopus Energy private MCP
 This local stdio server sends credentials and account identifiers only to \`api.octopus.energy\`.
 At startup, an optional anonymous version check reads only the public package version from \`api.github.com\`; its result is included in \`octopus_connection_status\`.
 
+0. Multiple sites (for example "York" and "Newport Pagnell") can each have their own API key and account. Call \`octopus_list_sites\` to see them, pass \`site="<name>"\` on account tools to choose one, or omit \`site\` to use the configured default site.
 1. Start with \`octopus_connection_status\` and \`octopus_discover_meters\`.
 2. Use \`octopus_get_consumption\` for raw intervals or server-side grouping.
 3. Use \`octopus_analyse_usage\` and \`octopus_compare_usage\` for local calculations.

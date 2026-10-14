@@ -29,7 +29,8 @@ No component listens on a TCP port. The authenticated energy clients reject any 
 
 ## Modules
 
-- `config.ts`: validated environment settings and a credential-free public view.
+- `config.ts`: validated environment settings and a credential-free public view. Parses optional multi-site definitions (`OCTOPUS_SITES`, `OCTOPUS_SITE_<SLUG>_*`, `OCTOPUS_DEFAULT_SITE`) into per-site credentials with a friendly name and slug.
+- `sites.ts`: site registry that resolves a friendly name or slug (falling back to the default site) and lazily builds each site's isolated config, rate limiter, REST client and GraphQL client.
 - `cache.ts`: atomic local JSON cache, namespaces, statistics and targeted clearing.
 - `rate-limiter.ts`: shared serial queue with a minimum interval and rolling-minute cap.
 - `octopus-client.ts`: REST authentication, retries, safe pagination, account/meter discovery, products, consumption and rates.
@@ -49,11 +50,11 @@ No component listens on a TCP port. The authenticated energy clients reject any 
 - Tariff rates: 30 minutes.
 - GraphQL: 30 seconds to one hour depending on volatility.
 
-Expired values are used only as a resilience fallback after transient network, timeout, `429` or `5xx` failures. Permanent authentication, validation and GraphQL errors are never masked. Returned data includes cache status, stale-use and age metadata; analysis and cost tools also add warnings when stale inputs were used. Cache keys can contain personal identifiers in memory but are converted to SHA-256 filenames; only response payloads and expiry metadata are written.
+Expired values are used only as a resilience fallback after transient network, timeout, `429` or `5xx` failures. Permanent authentication, validation and GraphQL errors are never masked. Returned data includes cache status, stale-use and age metadata; analysis and cost tools also add warnings when stale inputs were used. Cache keys can contain personal identifiers in memory but are converted to SHA-256 filenames; only response payloads and expiry metadata are written. REST and GraphQL cache keys are prefixed with the site slug, so cached responses never cross sites.
 
 ## Rate and size controls
 
-One limiter is shared by REST calls, GraphQL token exchange and GraphQL queries. Every retry reacquires the limiter. Defaults are 30 attempts/minute with at least 1,000 ms between attempts. `429` and `5xx` responses retry with `Retry-After` or exponential backoff.
+One limiter is shared by REST calls, GraphQL token exchange and GraphQL queries **within a site**; each configured site has its own limiter so one site's traffic cannot consume another site's Octopus allowance. Every retry reacquires the limiter. Defaults are 30 attempts/minute with at least 1,000 ms between attempts. `429` and `5xx` responses retry with `Retry-After` or exponential backoff.
 
 Pagination is capped by both pages and records per MCP call. Tools return `truncated=true` rather than silently continuing. Concurrent identical REST calls share one promise.
 

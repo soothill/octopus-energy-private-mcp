@@ -1,6 +1,6 @@
 # Octopus Energy Private MCP
 
-A privacy-first, local Model Context Protocol server for querying and analysing an Octopus Energy account. It exposes 23 read/analysis tools for meters, consumption, products, conventional tariff rates, four-rate EV pricing, Octopus-priced EV charge costs, cost replay, time-of-use patterns, smart-device telemetry, dispatches and Octoplus points.
+A privacy-first, local Model Context Protocol server for querying and analysing an Octopus Energy account. It exposes 24 read/analysis tools for meters, consumption, products, conventional tariff rates, four-rate EV pricing, Octopus-priced EV charge costs, cost replay, time-of-use patterns, smart-device telemetry, dispatches and Octoplus points. Multiple named sites (each with its own API key and account, such as York and Newport Pagnell) are supported with a configurable default site.
 
 This is an independent community project. It is not affiliated with or endorsed by Octopus Energy.
 
@@ -133,7 +133,7 @@ The image runs as an unprivileged user and persists only the cache volume. Docke
 
 | Area | Tools |
 |---|---|
-| Setup | `octopus_connection_status`, `octopus_discover_meters`, `octopus_get_account` |
+| Setup | `octopus_connection_status`, `octopus_list_sites`, `octopus_discover_meters`, `octopus_get_account` |
 | Products | `octopus_list_products`, `octopus_get_product` |
 | Consumption | `octopus_get_consumption`, `octopus_analyse_usage`, `octopus_compare_usage` |
 | Tariffs | `octopus_get_tariff_rates`, `octopus_get_current_rates`, `octopus_find_cheapest_windows`, `octopus_estimate_cost`, `octopus_compare_tariffs` |
@@ -143,6 +143,27 @@ The image runs as an unprivileged user and persists only the cache volume. Docke
 | Local maintenance | `octopus_clear_cache` |
 
 The server also publishes two resources (`octopus://server/configuration` and `octopus://help/capabilities`) and two reusable prompts for usage analysis and tariff comparison.
+
+### Multiple sites and API keys
+
+If you have more than one Octopus account — for example one account for a York site and another for Newport Pagnell — define each as a named site. Every site carries its own API key, account number and optional device IDs, and each site gets its own local rate limiter and isolated cache namespace:
+
+```bash
+OCTOPUS_SITES=York,Newport Pagnell
+OCTOPUS_DEFAULT_SITE=York
+
+OCTOPUS_SITE_YORK_NAME=York
+OCTOPUS_SITE_YORK_API_KEY=sk_live_york_key
+OCTOPUS_SITE_YORK_ACCOUNT_NUMBER=A-YORK0000
+
+OCTOPUS_SITE_NEWPORT_PAGNELL_NAME=Newport Pagnell
+OCTOPUS_SITE_NEWPORT_PAGNELL_API_KEY=sk_live_newport_key
+OCTOPUS_SITE_NEWPORT_PAGNELL_ACCOUNT_NUMBER=A-NEWPORT0
+```
+
+The variable prefix is `OCTOPUS_SITE_<SLUG>_`, where the slug is the site name uppercased with non-alphanumerics replaced by underscores (`Newport Pagnell` → `NEWPORT_PAGNELL`). `OCTOPUS_DEFAULT_SITE` selects the site used when a tool call omits `site`; if unset, the first listed site is the default.
+
+Account-scoped tools accept an optional `site` parameter matching the friendly name or slug (for example `site="York"` or `site="newport-pagnell"`). `octopus_list_sites` shows the configured sites, and `octopus_connection_status` includes them. When `OCTOPUS_SITES` is unset, the classic `OCTOPUS_API_KEY`/`OCTOPUS_ACCOUNT_NUMBER` pair remains the single default site, so existing setups keep working unchanged.
 
 ### Periods and meters
 
@@ -170,8 +191,15 @@ Under Octopus’s published rollout rules, the home normally receives its off-pe
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `OCTOPUS_API_KEY` | — | API key; needed for private data |
-| `OCTOPUS_ACCOUNT_NUMBER` | — | Default `A-...` account |
+| `OCTOPUS_API_KEY` | — | API key for the default (single-account) setup |
+| `OCTOPUS_ACCOUNT_NUMBER` | — | Default `A-...` account for the single-account setup |
+| `OCTOPUS_SITES` | — | Comma-separated friendly site names for multi-account setups |
+| `OCTOPUS_DEFAULT_SITE` | first site | Site used when a tool call omits `site` |
+| `OCTOPUS_SITE_<SLUG>_API_KEY` | — | Per-site API key |
+| `OCTOPUS_SITE_<SLUG>_ACCOUNT_NUMBER` | — | Per-site account number |
+| `OCTOPUS_SITE_<SLUG>_NAME` | slug | Friendly display name for the site |
+| `OCTOPUS_SITE_<SLUG>_SMART_METER_DEVICE_ID` | — | Optional per-site GraphQL telemetry device |
+| `OCTOPUS_SITE_<SLUG>_SMART_FLEX_DEVICE_ID` | — | Optional per-site planned-dispatch device |
 | `OCTOPUS_TIMEZONE` | `Europe/London` | Local period and analysis timezone |
 | `OCTOPUS_SMART_METER_DEVICE_ID` | — | Optional GraphQL telemetry device |
 | `OCTOPUS_SMART_FLEX_DEVICE_ID` | — | Optional planned-dispatch device |

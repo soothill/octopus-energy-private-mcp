@@ -76,13 +76,21 @@ export class OctopusGraphQlClient {
   }
 
   private apiKey(): string {
-    if (!this.config.apiKey) throw new Error("OCTOPUS_API_KEY is required for GraphQL features");
+    if (!this.config.apiKey) {
+      throw new Error(
+        `No API key is configured for site "${this.config.siteId}". Set OCTOPUS_SITE_${this.config.siteId.replace(/-/g, "_").toUpperCase()}_API_KEY (or OCTOPUS_API_KEY for the default site)`
+      );
+    }
     return this.config.apiKey;
   }
 
   private account(override?: string): string {
     const value = override?.trim().toUpperCase() || this.config.accountNumber;
-    if (!value) throw new Error("OCTOPUS_ACCOUNT_NUMBER is required for this GraphQL feature");
+    if (!value) {
+      throw new Error(
+        `No account number is configured for site "${this.config.siteId}". Pass account_number or set the site's ACCOUNT_NUMBER`
+      );
+    }
     if (!/^A-[A-Z0-9]+$/.test(value)) throw new Error("Account number must look like A-XXXXXXXX");
     return value;
   }
@@ -192,7 +200,7 @@ export class OctopusGraphQlClient {
     ttlMs: number,
     validate?: (data: T) => void
   ): Promise<T & CacheProvenance> {
-    const key = `graphql:${operationName}:${createHash("sha256").update(JSON.stringify(variables)).digest("hex")}`;
+    const key = `graphql:${this.config.siteId}:${operationName}:${createHash("sha256").update(JSON.stringify(variables)).digest("hex")}`;
     const cached = await this.cache.get<T>(key);
     if (cached) {
       validate?.(cached.value);

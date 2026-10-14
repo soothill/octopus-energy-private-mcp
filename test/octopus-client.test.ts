@@ -138,7 +138,7 @@ describe("Octopus REST client", () => {
     try {
       const config = testConfig({ cacheDir: directory, cacheEnabled: true, maxRetries: 0 });
       const cache = new FileCache(directory, true);
-      const key = "rest:GET:https://api.octopus.energy/v1/products/TEST/:";
+      const key = "rest:default:GET:https://api.octopus.energy/v1/products/TEST/:";
       await cache.set(key, "products", { code: "TEST", display_name: "Cached product" }, -1);
 
       const transientClient = new OctopusRestClient(

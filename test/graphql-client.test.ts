@@ -211,7 +211,7 @@ describe("Octopus GraphQL client", () => {
       const config = testConfig({ cacheDir: directory, cacheEnabled: true, maxRetries: 0 });
       const cache = new FileCache(directory, true);
       const variables = { accountNumber: "A-TEST1234" };
-      const key = `graphql:OctopusDevices:${createHash("sha256").update(JSON.stringify(variables)).digest("hex")}`;
+      const key = `graphql:default:OctopusDevices:${createHash("sha256").update(JSON.stringify(variables)).digest("hex")}`;
       await cache.set(key, "graphql", { devices: [{ id: "cached-device" }] }, -1);
       const tokenResponse = { data: { obtainKrakenToken: { token: "opaque-token" } } };
       let transientCalls = 0;

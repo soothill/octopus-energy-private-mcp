@@ -95,14 +95,20 @@ export class OctopusRestClient {
 
   private requireApiKey(): string {
     if (!this.config.apiKey) {
-      throw new Error("OCTOPUS_API_KEY is required for account and consumption data");
+      throw new Error(
+        `No API key is configured for site "${this.config.siteId}". Set OCTOPUS_SITE_${this.config.siteId.replace(/-/g, "_").toUpperCase()}_API_KEY (or OCTOPUS_API_KEY for the default site)`
+      );
     }
     return this.config.apiKey;
   }
 
   requireAccountNumber(override?: string): string {
     const account = override?.trim().toUpperCase() || this.config.accountNumber;
-    if (!account) throw new Error("OCTOPUS_ACCOUNT_NUMBER is required for this operation");
+    if (!account) {
+      throw new Error(
+        `No account number is configured for site "${this.config.siteId}". Pass account_number or set the site's ACCOUNT_NUMBER`
+      );
+    }
     if (!/^A-[A-Z0-9]+$/.test(account)) throw new Error("Account number must look like A-XXXXXXXX");
     return account;
   }
@@ -117,7 +123,7 @@ export class OctopusRestClient {
 
   private cacheKey(url: URL, options: RequestOptions): string {
     const body = options.body ? JSON.stringify(options.body) : "";
-    return `rest:${options.method ?? "GET"}:${url.toString()}:${body}`;
+    return `rest:${this.config.siteId}:${options.method ?? "GET"}:${url.toString()}:${body}`;
   }
 
   private retryDelay(response: Response | undefined, attempt: number): number {
