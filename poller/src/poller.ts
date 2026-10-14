@@ -3,6 +3,7 @@ import type { PollerConfig } from "./config.js";
 import { InfluxWriter, type Point } from "./influx.js";
 import { OctopusPollerClient, regionLetterFromTariff, type MeterTarget, type RateRecord } from "./octopus.js";
 import { IntelligentGraphqlClient, type IntelligentDevice } from "./intelligent.js";
+import { batteryPlanPoints, planBatteryDay } from "./planner.js";
 
 function log(message: string): void {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -283,6 +284,8 @@ export class SitePoller {
       ...this.config.marketExportProducts.map((product) => ({ product, direction: "export" as const }))
     ];
     const points: Point[] = [];
+    let plannerImport: RateRecord[] | null = null;
+    let plannerExport: RateRecord[] | null = null;
     for (const job of jobs) {
       const tariffCode = `E-1R-${job.product}-${region}`;
       try {
@@ -291,12 +294,32 @@ export class SitePoller {
         // half-hours, while dual-rate tariffs (e.g. Prime Outgoing Fixed day/night) and
         // flat tariffs arrive as long blocks that would otherwise sit at block-start only.
         const halfHours = expandToHalfHours(rates, from.getTime(), to.getTime());
+        if (job.direction === "import" && job.product === this.config.battery.plannerImportProduct) {
+          plannerImport = halfHours;
+        }
+        if (job.direction === "export" && job.product === this.config.battery.plannerExportProduct) {
+          plannerExport = halfHours;
+        }
         points.push(
           ...ratePoints(this.config.measurementPrefix, this.site.slug, job.direction, tariffCode, halfHours, "market")
         );
         log(`${this.site.name}: ${halfHours.length} market ${job.direction} half-hours (${tariffCode}, region ${region}, from ${rates.length} rate blocks)`);
       } catch (error) {
         log(`${this.site.name}: market ${job.direction} rates failed for ${tariffCode}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+    if (this.config.battery.sites.includes(this.site.slug) && plannerImport && plannerExport) {
+      try {
+        const plan = planBatteryDay(plannerImport, plannerExport, this.config.battery, this.config.timezone);
+        if (plan) {
+          points.push(...batteryPlanPoints(this.config.measurementPrefix, this.site.slug, plan));
+          log(
+            `${this.site.name}: battery plan for ${plan.day}, expected profit £${(plan.summary.expected_profit_pence / 100).toFixed(2)} ` +
+              `(cycle A ${plan.summary.cycle_a_enabled ? "on" : "off"}, evening ${plan.summary.evening_export_kwh} kWh, reserve ${plan.summary.reserve_kwh} kWh)`
+          );
+        }
+      } catch (error) {
+        log(`${this.site.name}: battery plan failed: ${error instanceof Error ? error.message : error}`);
       }
     }
     if (points.length > 0) {

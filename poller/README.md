@@ -10,7 +10,7 @@ A Dockerized poller that records Octopus Agile **import and export prices** (day
 | `octopus_consumption` | `site`, `direction`, `mpan` | `kwh` | Half-hourly import/export readings from the smart meter. |
 | `octopus_cost` | `site`, `direction` | `kwh`, `rate_inc_vat`, `cost_inc_vat_pence` / `revenue_inc_vat_pence` | Each interval matched to its rate (Octopus half-to-even 0.01 kWh rounding). |
 | `octopus_battery_signal` | `site`, `action` (export/import) | `import_pence`, `export_pence`, `spread_pence` | Per future half-hour: `spread = export − import`. Positive spread ⇒ discharge/export beats charging. |
-| `octopus_battery_plan` | `site`, `day` | `profitable_export_half_hours`, `potential_margin_p_per_kwh`, `best_export_1..4_unix`, `cheapest_import_1..4_unix`, `min_import_pence`, `max_export_pence` | Daily arbitrage summary for the forward window. |
+| `octopus_battery_plan` | `site`, `day`, `action` | summary: `cycle_a_enabled`, `grid_charge_kwh`, `grid_charge_cost_pence`, `morning_export_kwh`, `morning_revenue_pence`, `solar_refill_kwh`, `evening_export_kwh`, `evening_revenue_pence`, `reserve_kwh`, `reserve_value_pence`, `expected_profit_pence`; per-slot: `kwh`, `soc_after` (kWh), `import_pence`, `export_pence` | Day-ahead two-cycle schedule for battery sites (`BATTERY_PLAN_SITES`), timestamped at each half-hour. `action` is one of `grid_charge` (cheap window, e.g. Go 7p), `discharge_morning`, `solar_refill` (assumed free), `discharge_evening` (down to the reserve), `reserve` (drains 19:00–23:00), plus one `summary` point per day. The legacy tariff-spread summary (`action` absent) is still written from the site's own rates. |
 | `octopus_intelligent_dispatch` | `site`, `device_id`, `device_type`, `status` (planned/completed), `dispatch_type` | `energy_kwh`, `duration_minutes` | Intelligent Octopus (SmartFlex) dispatch windows from the Kraken GraphQL API: planned slots per device (~24h ahead) and completed slots for the account (~12h behind). |
 | `octopus_poll_status` | `site`, `task` | `ok`, `records` | Liveness marker per poll. |
 
@@ -31,6 +31,18 @@ Agile publishes next-day half-hourly import prices (~16:00–20:00) and the Agil
 - **spread ≤ 0** → cheaper to hold/import → tag `action=import`.
 
 `octopus_battery_plan` ranks the best export half-hours and cheapest import half-hours for the day so you (or a downstream automation) can schedule charge/discharge windows.
+
+## Day-ahead battery planner
+
+For sites listed in `BATTERY_PLAN_SITES`, the poller also builds a concrete two-cycle schedule from the day-ahead **market** prices (Agile import + Agile export products), modelling a cheap fixed-rate night tariff (e.g. Octopus Go 7p 00:30–05:30) even if the site is not yet on it:
+
+1. **`grid_charge`** — charge from grid in the cheapest slots of `BATTERY_CHEAP_IMPORT_WINDOW` until full (skipped entirely if the morning peak doesn't pay for it).
+2. **`discharge_morning`** — export the best-priced morning half-hours (06:00–09:30).
+3. **`solar_refill`** — solar refills the battery through the day (assumed free; no midday exporting).
+4. **`discharge_evening`** — dump into the best evening half-hours (16:00–19:00) **down to `BATTERY_RESERVE_KWH`**, not to empty.
+5. **`reserve`** — the held-back kWh drains across 19:00–23:00 to cover house load until the next cheap window starts (valued as avoided import).
+
+Power limits (`BATTERY_CHARGE_KW`/`BATTERY_DISCHARGE_KW`) and round-trip efficiency (`BATTERY_EFFICIENCY`) are enforced per half-hour; SOC starts and ends the day empty (steady state). The `summary` point carries `expected_profit_pence` for the plan. Mirror the windows in the inverter's TOU schedule, or feed the points to an automation.
 
 ## Configure
 

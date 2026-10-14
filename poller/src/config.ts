@@ -24,6 +24,18 @@ export interface PollerConfig {
   measurementPrefix: string;
   marketImportProducts: string[];
   marketExportProducts: string[];
+  battery: {
+    sites: string[];
+    capacityKwh: number;
+    chargeKw: number;
+    dischargeKw: number;
+    efficiency: number;
+    cheapImportPence: number;
+    cheapImportWindow: string;
+    reserveKwh: number;
+    plannerImportProduct: string;
+    plannerExportProduct: string;
+  };
 }
 
 function env(name: string): string | undefined {
@@ -43,6 +55,16 @@ function integerEnv(name: string, fallback: number, min: number, max: number): n
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
     throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
+function numberEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = env(name);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be a number between ${min} and ${max}`);
   }
   return parsed;
 }
@@ -110,6 +132,22 @@ export function loadPollerConfig(): PollerConfig {
     marketExportProducts: (env("POLL_MARKET_EXPORT_PRODUCTS") ?? "AGILE-OUTGOING-19-05-13,OUTGOING-VAR-24-10-26,OUTGOING-PRIME-FIX-12M-26-06-23")
       .split(",")
       .map((product) => product.trim().toUpperCase())
-      .filter(Boolean)
+      .filter(Boolean),
+    battery: {
+      sites: (env("BATTERY_PLAN_SITES") ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => siteSlug(entry)),
+      capacityKwh: numberEnv("BATTERY_CAPACITY_KWH", 9, 0.5, 100),
+      chargeKw: numberEnv("BATTERY_CHARGE_KW", 4.4, 0.1, 50),
+      dischargeKw: numberEnv("BATTERY_DISCHARGE_KW", 7.2, 0.1, 50),
+      efficiency: numberEnv("BATTERY_EFFICIENCY", 0.9, 0.5, 1),
+      cheapImportPence: numberEnv("BATTERY_CHEAP_IMPORT_PENCE", 7, 0, 100),
+      cheapImportWindow: env("BATTERY_CHEAP_IMPORT_WINDOW") ?? "00:30-05:30",
+      reserveKwh: numberEnv("BATTERY_RESERVE_KWH", 2, 0, 100),
+      plannerImportProduct: (env("PLANNER_IMPORT_PRODUCT") ?? "AGILE-24-10-01").trim().toUpperCase(),
+      plannerExportProduct: (env("PLANNER_EXPORT_PRODUCT") ?? "AGILE-OUTGOING-19-05-13").trim().toUpperCase()
+    }
   };
 }
