@@ -40,8 +40,8 @@ async function main(): Promise<void> {
 
   const priceTimer = setInterval(() => void runCycle(pollers, "prices"), config.priceIntervalMs);
   const consumptionTimer = setInterval(() => void runCycle(pollers, "consumption"), config.consumptionIntervalMs);
-  priceTimer.unref();
-  consumptionTimer.unref();
+  // Note: do not unref() these timers — this process is a daemon and the
+  // event loop must stay alive between cycles.
 }
 
 main().catch((error) => {
