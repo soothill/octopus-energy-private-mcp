@@ -135,6 +135,31 @@ export class OctopusPollerClient {
     return results;
   }
 
+  /** Pick the meter that is actually reporting data; accounts can list replaced meters first. */
+  private async pickActiveMeter(
+    mpan: string,
+    meters: Array<{ serial_number: string }>
+  ): Promise<{ serial_number: string } | undefined> {
+    if (meters.length <= 1) return meters[0];
+    const to = new Date();
+    const from = new Date(to.getTime() - 2 * 86400000);
+    for (const meter of meters) {
+      const url = this.safeUrl(
+        `electricity-meter-points/${encodeURIComponent(mpan)}/meters/${encodeURIComponent(meter.serial_number)}/consumption/`
+      );
+      url.searchParams.set("period_from", from.toISOString());
+      url.searchParams.set("period_to", to.toISOString());
+      url.searchParams.set("page_size", "1");
+      try {
+        const page = await this.requestJson<Paged<ConsumptionRecord>>(url, true);
+        if (page.results.length > 0) return meter;
+      } catch {
+        // probe failed; try the next candidate
+      }
+    }
+    return meters[0];
+  }
+
   /** Discover the active import and export electricity meters for the site. */
   async discoverTargets(): Promise<MeterTarget[]> {
     const account = await this.requestJson<AccountResponse>(
@@ -147,7 +172,7 @@ export class OctopusPollerClient {
       for (const point of property.electricity_meter_points ?? []) {
         const agreement = activeAgreement(point.agreements ?? [], now);
         if (!agreement) continue;
-        const meter = point.meters?.[0];
+        const meter = await this.pickActiveMeter(point.mpan, point.meters ?? []);
         if (!meter) continue;
         let product_code: string;
         try {
