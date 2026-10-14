@@ -1,0 +1,24 @@
+{
+  "name": "octopus-influx-poller",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Polls Octopus Agile import/export prices, consumption and costs for multiple sites and writes them to InfluxDB 2.x for battery arbitrage decisions.",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "npm run build && node dist/index.js --once"
+  },
+  "dependencies": {
+    "luxon": "^3.7.2"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.1",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.0"
+  }
+}

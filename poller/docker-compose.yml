@@ -1,0 +1,18 @@
+services:
+  octopus-poller:
+    build: .
+    image: octopus-influx-poller:local
+    container_name: octopus-influx-poller
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Join the docker network your InfluxDB 2.x container is attached to so
+    # INFLUX_URL can use the container name (e.g. http://influxdb:8086).
+    # networks:
+    #   - influx
+    #   - proxmox
+    #   - bridge
+
+networks: {}
+  # influx:
+  #   external: true
