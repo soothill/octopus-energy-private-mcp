@@ -334,7 +334,7 @@ export class SitePoller {
           });
         }
       }
-      log(`${this.site.name}: ${records.length} ${job.direction} readings, ~${(costPence / 100).toFixed(2)} GBP`);
+      log(`${this.site.name}: ${records.length} ${job.direction} readings over ${lookbackDays}d window, ~${(costPence / 100).toFixed(2)} GBP in window`);
     }
     points.push({
       measurement: `${this.config.measurementPrefix}poll_status`,
