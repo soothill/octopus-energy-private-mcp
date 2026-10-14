@@ -34,6 +34,24 @@ function toUnixSeconds(iso: string): number {
   return Math.floor(Date.parse(iso) / 1000);
 }
 
+/** Expand rate blocks (any duration) into half-hourly records covering [fromMs, toMs). */
+function expandToHalfHours(rates: RateRecord[], fromMs: number, toMs: number): RateRecord[] {
+  const slotMs = 1_800_000;
+  const start = Math.floor(fromMs / slotMs) * slotMs;
+  const slots: RateRecord[] = [];
+  for (let at = start; at < toMs; at += slotMs) {
+    const rate = rateAt(rates, at);
+    if (!rate) continue;
+    slots.push({
+      valid_from: new Date(at).toISOString(),
+      valid_to: new Date(at + slotMs).toISOString(),
+      value_inc_vat: rate.value_inc_vat,
+      value_exc_vat: rate.value_exc_vat
+    });
+  }
+  return slots;
+}
+
 function ratePoints(
   prefix: string,
   site: string,
@@ -269,10 +287,14 @@ export class SitePoller {
       const tariffCode = `E-1R-${job.product}-${region}`;
       try {
         const rates = await this.client.getTariffRates(job.product, tariffCode, from, to);
+        // Normalise every market tariff to half-hourly points: Agile already publishes
+        // half-hours, while dual-rate tariffs (e.g. Prime Outgoing Fixed day/night) and
+        // flat tariffs arrive as long blocks that would otherwise sit at block-start only.
+        const halfHours = expandToHalfHours(rates, from.getTime(), to.getTime());
         points.push(
-          ...ratePoints(this.config.measurementPrefix, this.site.slug, job.direction, tariffCode, rates, "market")
+          ...ratePoints(this.config.measurementPrefix, this.site.slug, job.direction, tariffCode, halfHours, "market")
         );
-        log(`${this.site.name}: ${rates.length} market ${job.direction} rates (${tariffCode}, region ${region})`);
+        log(`${this.site.name}: ${halfHours.length} market ${job.direction} half-hours (${tariffCode}, region ${region}, from ${rates.length} rate blocks)`);
       } catch (error) {
         log(`${this.site.name}: market ${job.direction} rates failed for ${tariffCode}: ${error instanceof Error ? error.message : error}`);
       }
