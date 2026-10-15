@@ -17,6 +17,7 @@ interface Scenario {
   importCostP: number;
   exportRevP: number;
   standingP: number;
+  note?: string;
 }
 
 const netGain = (s: Scenario): number => s.exportRevP - s.importCostP - s.standingP;
@@ -186,7 +187,6 @@ interface OptimisedResult {
   shiftedKwh: number;
   shiftedMiddayP: number;
   eveningRevP: number;
-  reserveAvoidP: number;
   note: string;
 }
 
@@ -196,8 +196,10 @@ interface OptimisedResult {
  *  2. export most of it into the highest morning export rates
  *  3. let solar refill the battery through the middle of the day
  *  4. export most of that between 16:00-19:00, holding back a reserve
- *  5. the reserve covers evening load until the cheap import window restarts
+ *  5. the reserve (solar-topped) covers evening load until the cheap window restarts
  * Each cycle only counts if it was actually profitable on the day's prices.
+ * The reserve earns no import credit: the actual battery already covered the
+ * evening load, so the night-charge import is the strategy's only extra import.
  */
 function optimisedUplift(flows: DayFlow[], prices: Record<string, Map<number, number>>, config: PollerConfig): OptimisedResult {
   const C = config.battery.capacityKwh;
@@ -209,7 +211,6 @@ function optimisedUplift(flows: DayFlow[], prices: Record<string, Map<number, nu
   const middayExports = flows
     .filter((f) => f.minute >= 600 && f.minute < 930 && f.exportKwh > 0)
     .sort((a, b) => rateAt(prices.agileExport, a.minute) - rateAt(prices.agileExport, b.minute));
-  const eveningImports = flows.filter((f) => f.minute >= 1140 && f.minute < 1380);
 
   // Cycle A: overnight grid charge -> highest morning export rates
   const chargeCostP = C * config.battery.cheapImportPence;
@@ -246,16 +247,11 @@ function optimisedUplift(flows: DayFlow[], prices: Record<string, Map<number, nu
   const cycleB = eveningRevP - shiftedMiddayP;
   const doB = cycleB > 0 && shiftedKwh > 0;
 
-  // Reserve: held-back kWh avoid importing during the 19:00-23:00 gap
-  const reserveAvoidP = eveningImports.length
-    ? (reserve * eveningImports.reduce((t, f) => t + rateAt(prices.agileImport, f.minute), 0)) / eveningImports.length
-    : 0;
-
-  const upliftP = (doA ? cycleA : 0) + (doB ? cycleB : 0) + reserveAvoidP;
+  const upliftP = (doA ? cycleA : 0) + (doB ? cycleB : 0);
   const parts: string[] = [];
   parts.push(doA ? `night charge ${C} kWh @ ${config.battery.cheapImportPence}p out at the morning peak ${money(cycleA)}` : "night cycle skipped (unprofitable on the day)");
   parts.push(doB ? `solar shift ${shiftedKwh.toFixed(1)} kWh midday→16:00-19:00 ${money(cycleB)}` : "no solar surplus to shift");
-  parts.push(`reserve ${reserve} kWh covers evening load ${money(reserveAvoidP)}`);
+  parts.push(`reserve ${reserve} kWh held back for evening load (solar-topped, no extra import)`);
   return {
     upliftP,
     chargeKwh: doA ? C : 0,
@@ -264,7 +260,6 @@ function optimisedUplift(flows: DayFlow[], prices: Record<string, Map<number, nu
     shiftedKwh: doB ? shiftedKwh : 0,
     shiftedMiddayP: doB ? shiftedMiddayP : 0,
     eveningRevP: doB ? eveningRevP : 0,
-    reserveAvoidP,
     note: parts.join(" · ")
   };
 }
@@ -281,7 +276,7 @@ function renderEmail(data: ReportData, config: PollerConfig, standing: Record<st
     .map(
       (s) => `<tr>
   <td style="padding:4px 8px">${s.name}</td>
-  <td align="right" style="padding:4px 8px">${signed(-s.importCostP)}</td>
+  <td align="right" style="padding:4px 8px">${signed(-s.importCostP)}${s.note ? `<br><span style="color:#888;font-size:11px">${s.note}</span>` : ""}</td>
   <td align="right" style="padding:4px 8px">${signed(s.exportRevP)}</td>
   <td align="right" style="padding:4px 8px">${signed(-s.standingP)}</td>
   <td align="right" style="padding:4px 8px"><b>${signed(netGain(s))}</b></td>
@@ -314,7 +309,7 @@ function renderEmail(data: ReportData, config: PollerConfig, standing: Record<st
 ${rows}
 </table>
 <h3 style="margin:16px 0 4px">Optimised battery strategy (top row of the table)</h3>
-<p style="margin:0 0 4px">Charge from the grid overnight in the Go cheap window → export it into the day's highest morning export rates → solar refills the battery through the middle of the day → export most of that 16:00–19:00 → hold back ${config.battery.reserveKwh} kWh to cover evening load until the cheap window restarts.</p>
+<p style="margin:0 0 4px">Charge from the grid overnight in the Go cheap window → export it into the day's highest morning export rates → solar refills the battery through the middle of the day → export most of that 16:00–19:00 → hold back ${config.battery.reserveKwh} kWh (solar-topped) to cover evening load until the cheap window restarts. The overnight charge is the only extra import the strategy needs.</p>
 <p style="margin:0">Extra profit vs actual behaviour: <b>${signed(data.optimisedUpliftP)}</b><br><span style="color:#555">${data.optimisedNote}</span></p>
 <h3 style="margin:16px 0 4px">Net gain totals (${data.cumulative.days} days recorded)</h3>
 <table border="1" cellpadding="2" cellspacing="0" style="border-collapse:collapse;border-color:#ddd">
@@ -364,13 +359,15 @@ export async function runDailyReport(
   if (scenarios[4]) scenarios[4].standingP = agileStanding;
 
   const uplift = optimisedUplift(flows, prices, config);
-  // Full scenario: Go + Agile with the optimised battery dispatch applied on top
+  // Full scenario: Go + Agile with the optimised battery dispatch applied on top.
+  // Import cost includes the overnight grid charge (the strategy's only extra import).
   const goAgile = scenarios[2];
   scenarios.push({
     name: "Go + Agile + optimised battery",
-    importCostP: goAgile.importCostP + uplift.chargeCostP - uplift.reserveAvoidP,
+    importCostP: goAgile.importCostP + uplift.chargeCostP,
     exportRevP: goAgile.exportRevP + uplift.morningRevP + uplift.eveningRevP - uplift.shiftedMiddayP,
-    standingP: goAgile.standingP
+    standingP: goAgile.standingP,
+    note: uplift.chargeKwh > 0 ? `incl. ${uplift.chargeKwh} kWh night charge @ ${config.battery.cheapImportPence}p` : undefined
   });
   const sum = (fn: (f: DayFlow) => number) => flows.reduce((t, f) => t + fn(f), 0);
   const data: ReportData = {
@@ -399,8 +396,8 @@ export async function runDailyReport(
   const totals: Record<string, number> = {};
   const last7: Record<string, number> = {};
   const last30: Record<string, number> = {};
-  const seenDays = new Set<string>();
-  const countedDays = new Set<string>();
+  const rowsByDay = new Map<string, Record<string, string>>();
+  for (const row of history) rowsByDay.set(row.day, row);
   const from7 = dayStart.minus({ days: 6 }).toISODate()!;
   const from30 = dayStart.minus({ days: 29 }).toISODate()!;
   const addDays = (target: Record<string, number>, row: Record<string, string>) => {
@@ -408,26 +405,18 @@ export async function runDailyReport(
       if (key.startsWith("gain_") || key === "uplift_opt_pence") target[key] = (target[key] ?? 0) + Number(value);
     }
   };
-  for (const row of history) {
-    seenDays.add(row.day);
-    if (Object.keys(row).some((k) => k.startsWith("gain_"))) countedDays.add(row.day);
+  if (rowsByDay.has(day) && !opts.dryRun && !opts.force) throw new Error(`report for ${day} already sent`);
+  // The freshly computed day always replaces any stored row for it (force re-sends self-correct)
+  const freshRow: Record<string, string> = { day };
+  data.scenarios.forEach((s, i) => (freshRow[label(names[i])] = String(dayGain(s))));
+  freshRow["uplift_opt_pence"] = String(uplift.upliftP);
+  rowsByDay.set(day, freshRow);
+  for (const [d, row] of rowsByDay) {
     addDays(totals, row);
-    if (row.day >= from7) addDays(last7, row);
-    if (row.day >= from30) addDays(last30, row);
+    if (d >= from7) addDays(last7, row);
+    if (d >= from30) addDays(last30, row);
   }
-  if (seenDays.has(day) && !opts.dryRun && !opts.force) throw new Error(`report for ${day} already sent`);
-  const freshDay = !countedDays.has(day);
-  if (freshDay) {
-    // include the freshly computed day in the running totals
-    const freshRow: Record<string, string> = { day };
-    data.scenarios.forEach((s, i) => (freshRow[label(names[i])] = String(s.exportRevP - s.importCostP - s.standingP)));
-    freshRow["uplift_opt_pence"] = String(uplift.upliftP);
-    addDays(totals, freshRow);
-    if (day >= from7) addDays(last7, freshRow);
-    if (day >= from30) addDays(last30, freshRow);
-    seenDays.add(day);
-  }
-  data.cumulative = { days: seenDays.size, totals, last7, last30 };
+  data.cumulative = { days: rowsByDay.size, totals, last7, last30 };
 
   const { subject, html } = renderEmail(data, config, standing);
   if (opts.dryRun) {
@@ -438,18 +427,16 @@ export async function runDailyReport(
   const transporter = nodemailer.createTransport({ host: reportCfg.smtpHost, port: reportCfg.smtpPort, ignoreTLS: true });
   await transporter.sendMail({ from: reportCfg.from, to: reportCfg.to, subject, html });
   // Only mark the day as sent after the email actually went out
-  if (freshDay) {
-    const fields: Record<string, number> = { uplift_opt_pence: round(uplift.upliftP), pv_kwh: round(data.pvKwh), export_kwh: round(data.exportKwh), import_kwh: round(data.importKwh) };
-    data.scenarios.forEach((s, i) => (fields[label(names[i])] = round(dayGain(s))));
-    await influx.write([
-      {
-        measurement: `${config.measurementPrefix}tariff_report`,
-        tags: { site: reportCfg.site, day },
-        fields,
-        timestamp: Math.floor(dayStart.plus({ hours: 12 }).toSeconds())
-      }
-    ]);
-  }
+  const fields: Record<string, number> = { uplift_opt_pence: round(uplift.upliftP), pv_kwh: round(data.pvKwh), export_kwh: round(data.exportKwh), import_kwh: round(data.importKwh) };
+  data.scenarios.forEach((s, i) => (fields[label(names[i])] = round(dayGain(s))));
+  await influx.write([
+    {
+      measurement: `${config.measurementPrefix}tariff_report`,
+      tags: { site: reportCfg.site, day },
+      fields,
+      timestamp: Math.floor(dayStart.plus({ hours: 12 }).toSeconds())
+    }
+  ]);
   return subject;
 }
 
