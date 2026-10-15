@@ -13,6 +13,7 @@ A Dockerized poller that records Octopus Agile **import and export prices** (day
 | `octopus_battery_plan` | `site`, `day`, `action` | summary: `cycle_a_enabled`, `grid_charge_kwh`, `grid_charge_cost_pence`, `morning_export_kwh`, `morning_revenue_pence`, `solar_refill_kwh`, `evening_export_kwh`, `evening_revenue_pence`, `reserve_kwh`, `reserve_value_pence`, `expected_profit_pence`; per-slot: `kwh`, `soc_after` (kWh), `import_pence`, `export_pence` | Day-ahead two-cycle schedule for battery sites (`BATTERY_PLAN_SITES`), timestamped at each half-hour. `action` is one of `grid_charge` (cheap window, e.g. Go 7p), `discharge_morning`, `solar_refill` (assumed free), `discharge_evening` (down to the reserve), `reserve` (drains 19:00–23:00), plus one `summary` point per day. The legacy tariff-spread summary (`action` absent) is still written from the site's own rates. |
 | `octopus_intelligent_dispatch` | `site`, `device_id`, `device_type`, `status` (planned/completed), `dispatch_type` | `energy_kwh`, `duration_minutes` | Intelligent Octopus (SmartFlex) dispatch windows from the Kraken GraphQL API: planned slots per device (~24h ahead) and completed slots for the account (~12h behind). |
 | `octopus_poll_status` | `site`, `task` | `ok`, `records` | Liveness marker per poll. |
+| `octopus_tariff_report` | `site`, `day` | `net_current_pence`, `net_go_var_pence`, `net_go_agile_pence`, `net_go_prime_pence`, `net_agile_agile_pence`, `uplift_opt_pence`, `pv_kwh`, `export_kwh`, `import_kwh` | Daily tariff-comparison replay (see "Daily tariff report"). One point per day; the emailed report's running totals are the column sums. |
 
 ## Intelligent Octopus (IOG) sites
 
@@ -43,6 +44,17 @@ For sites listed in `BATTERY_PLAN_SITES`, the poller also builds a concrete two-
 5. **`reserve`** — the held-back kWh drains across 19:00–23:00 to cover house load until the next cheap window starts (valued as avoided import).
 
 Power limits (`BATTERY_CHARGE_KW`/`BATTERY_DISCHARGE_KW`) and round-trip efficiency (`BATTERY_EFFICIENCY`) are enforced per half-hour; SOC starts and ends the day empty (steady state). The `summary` point carries `expected_profit_pence` for the plan. Mirror the windows in the inverter's TOU schedule, or feed the points to an automation.
+
+## Daily tariff report
+
+When `REPORT_ENABLED=true`, each morning at `REPORT_TIME` (UK) the poller emails an HTML report for the previous day (site `REPORT_SITE`) that replays the day's **actual** import/export profile (from the Sigenergy telemetry bucket) under every tariff combination:
+
+- current tariff (no export deal)
+- Go import + Outgoing VAR / Agile / Prime export
+- Agile import + Agile export
+- plus the **optimised battery-dispatch uplift** (two-cycle replay: night grid-charge → morning peak → solar refill → evening dump to reserve) on the day's real prices
+
+Standing charges are fetched live from the Octopus API. Each day's figures are stored as `octopus_tariff_report` points and the email shows running totals since the first report, so the tariff decision builds up from real data. Mail goes through the LAN SMTP relay (`REPORT_SMTP_HOST`, e.g. yorkstorj's postfix relaying via Gmail). A day is only marked sent after the email leaves, so restarts never double-send (pass `force` to `runDailyReport` to re-send).
 
 ## Configure
 

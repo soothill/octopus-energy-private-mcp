@@ -14,7 +14,8 @@
     "dev": "npm run build && node dist/index.js --once"
   },
   "dependencies": {
-    "luxon": "^3.7.2"
+    "luxon": "^3.7.2",
+    "nodemailer": "^10.1.1"
   },
   "devDependencies": {
     "@types/luxon": "^3.7.1",

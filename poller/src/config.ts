@@ -36,6 +36,17 @@ export interface PollerConfig {
     plannerImportProduct: string;
     plannerExportProduct: string;
   };
+  report: {
+    enabled: boolean;
+    site: string;
+    smtpHost: string;
+    smtpPort: number;
+    from: string;
+    to: string;
+    time: string;
+    goDayPence: number;
+    sigenergyBucket: string;
+  };
 }
 
 function env(name: string): string | undefined {
@@ -148,6 +159,17 @@ export function loadPollerConfig(): PollerConfig {
       reserveKwh: numberEnv("BATTERY_RESERVE_KWH", 2, 0, 100),
       plannerImportProduct: (env("PLANNER_IMPORT_PRODUCT") ?? "AGILE-24-10-01").trim().toUpperCase(),
       plannerExportProduct: (env("PLANNER_EXPORT_PRODUCT") ?? "AGILE-OUTGOING-19-05-13").trim().toUpperCase()
+    },
+    report: {
+      enabled: (env("REPORT_ENABLED") ?? "").toLowerCase() === "true",
+      site: env("REPORT_SITE") ?? "york",
+      smtpHost: env("REPORT_SMTP_HOST") ?? "yorkstorj",
+      smtpPort: integerEnv("REPORT_SMTP_PORT", 25, 1, 65535),
+      from: env("REPORT_FROM") ?? "octopus-poller@soothill.com",
+      to: env("REPORT_TO") ?? "",
+      time: env("REPORT_TIME") ?? "07:30",
+      goDayPence: numberEnv("REPORT_GO_DAY_PENCE", 26.07, 0, 200),
+      sigenergyBucket: env("REPORT_SIGENERGY_BUCKET") ?? "sigenergy"
     }
   };
 }

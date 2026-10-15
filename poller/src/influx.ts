@@ -67,4 +67,58 @@ export class InfluxWriter {
       throw new Error(`InfluxDB write failed: HTTP ${response.status} ${text.slice(0, 300)}`);
     }
   }
+
+  /** Run a Flux query and return the result rows as plain objects (annotated CSV parsed). */
+  async query(flux: string): Promise<Record<string, string>[]> {
+    const url = new URL("/api/v2/query", this.options.baseUrl);
+    url.searchParams.set("org", this.options.org);
+    const response = await (this.options.fetchFn ?? globalThis.fetch)(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${this.options.token}`,
+        "Content-Type": "application/json",
+        Accept: "text/csv"
+      },
+      body: JSON.stringify({ query: flux, dialect: { header: true, annotations: ["datatype"] } }),
+      signal: AbortSignal.timeout(this.options.timeoutMs ?? 60_000)
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`InfluxDB query failed: HTTP ${response.status} ${text.slice(0, 300)}`);
+    }
+    const csv = (await response.text()).replace(/\r/g, "");
+    const rows: Record<string, string>[] = [];
+    let header: string[] = [];
+    for (const line of csv.split("\n")) {
+      if (line.startsWith("#")) continue;
+      if (line.trim() === "") {
+        header = [];
+        continue;
+      }
+      const cells = splitCsvLine(line);
+      if (!header.length) {
+        header = cells;
+        continue;
+      }
+      const row: Record<string, string> = {};
+      header.forEach((key, i) => (row[key] = cells[i] ?? ""));
+      rows.push(row);
+    }
+    return rows;
+  }
+}
+
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (const ch of line) {
+    if (ch === '"') quoted = !quoted;
+    else if (ch === "," && !quoted) {
+      cells.push(current);
+      current = "";
+    } else current += ch;
+  }
+  cells.push(current);
+  return cells;
 }

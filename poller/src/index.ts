@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+import { DateTime } from "luxon";
 import { loadPollerConfig } from "./config.js";
 import { InfluxWriter } from "./influx.js";
 import { SitePoller } from "./poller.js";
+import { runDailyReport } from "./reporter.js";
 
 function log(message: string): void {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -47,6 +49,28 @@ async function main(): Promise<void> {
   const consumptionTimer = setInterval(() => void runCycle(pollers, "consumption"), config.consumptionIntervalMs);
   // Note: do not unref() these timers — this process is a daemon and the
   // event loop must stay alive between cycles.
+
+  if (config.report.enabled) {
+    if (!config.report.to) throw new Error("REPORT_TO is required when REPORT_ENABLED=true");
+    let lastAttemptDay = "";
+    const [reportHour, reportMinute] = config.report.time.split(":").map(Number);
+    const checkReport = async (): Promise<void> => {
+      const now = DateTime.now().setZone(config.timezone);
+      const today = now.toISODate()!;
+      const due = now.hour > reportHour || (now.hour === reportHour && now.minute >= reportMinute);
+      if (!due || lastAttemptDay === today) return;
+      lastAttemptDay = today;
+      try {
+        const subject = await runDailyReport(config, influx);
+        log(`daily report sent: ${subject}`);
+      } catch (error) {
+        log(`daily report failed: ${error instanceof Error ? error.message : error}`);
+      }
+    };
+    const reportTimer = setInterval(() => void checkReport(), 60_000);
+    void checkReport();
+    void reportTimer;
+  }
 }
 
 main().catch((error) => {
