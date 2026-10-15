@@ -19,7 +19,7 @@ interface Scenario {
   standingP: number;
 }
 
-const netCost = (s: Scenario): number => s.importCostP - s.exportRevP + s.standingP;
+const netGain = (s: Scenario): number => s.exportRevP - s.importCostP - s.standingP;
 
 interface ReportData {
   day: string;
@@ -31,7 +31,7 @@ interface ReportData {
   scenarios: Scenario[];
   optimisedUpliftP: number;
   optimisedNote: string;
-  cumulative: { days: number; totals: Record<string, number> };
+  cumulative: { days: number; totals: Record<string, number>; last7: Record<string, number>; last30: Record<string, number> };
 }
 
 function ukSlot(iso: string): { day: string; minute: number } {
@@ -232,49 +232,63 @@ function optimisedUplift(flows: DayFlow[], prices: Record<string, Map<number, nu
   };
 }
 
+const signed = (pence: number): string => {
+  const value = pence / 100;
+  const colour = value > 0.005 ? "#0a7a2f" : value < -0.005 ? "#b3261e" : "#555";
+  return `<span style="color:${colour}">${value >= 0 ? "+" : "−"}£${Math.abs(value).toFixed(2)}</span>`;
+};
+
 function renderEmail(data: ReportData, config: PollerConfig, standing: Record<string, number>): { subject: string; html: string } {
-  const best = [...data.scenarios].sort((a, b) => netCost(a) - netCost(b))[0];
+  const best = [...data.scenarios].sort((a, b) => netGain(b) - netGain(a))[0];
   const rows = data.scenarios
     .map(
       (s) => `<tr>
   <td style="padding:4px 8px">${s.name}</td>
-  <td align="right" style="padding:4px 8px">${money(s.importCostP)}</td>
-  <td align="right" style="padding:4px 8px">-${money(s.exportRevP)}</td>
-  <td align="right" style="padding:4px 8px">${money(s.standingP)}</td>
-  <td align="right" style="padding:4px 8px"><b>${money(netCost(s))}</b></td>
+  <td align="right" style="padding:4px 8px">${signed(-s.importCostP)}</td>
+  <td align="right" style="padding:4px 8px">${signed(s.exportRevP)}</td>
+  <td align="right" style="padding:4px 8px">${signed(-s.standingP)}</td>
+  <td align="right" style="padding:4px 8px"><b>${signed(netGain(s))}</b></td>
 </tr>`
     )
     .join("\n");
   const scenarioLabels: Record<string, string> = {
-    net_current: "Current tariff",
-    net_go_var: "Go + Outgoing VAR",
-    net_go_agile: "Go + Agile export",
-    net_go_prime: "Go + Prime",
-    net_agile_agile: "Agile + Agile",
-    uplift_opt_pence: "Optimised battery uplift (profit)"
+    gain_current: "Current tariff",
+    gain_go_var: "Go + Outgoing VAR",
+    gain_go_agile: "Go + Agile export",
+    gain_go_prime: "Go + Prime",
+    gain_agile_agile: "Agile + Agile",
+    uplift_opt_pence: "Optimised battery uplift (extra)"
   };
-  const cumRows = Object.entries(data.cumulative.totals)
-    .map(([name, total]) => `<tr><td style="padding:4px 8px">${scenarioLabels[name] ?? name}</td><td align="right" style="padding:4px 8px">${money(total)}</td></tr>`)
-    .join("\n");
-  const subject = `Octopus tariff report ${data.day}: best ${best ? best.name : "n/a"}, optimised uplift ${money(data.optimisedUpliftP)}`;
+  const cumRow = (name: string) =>
+    `<tr><td style="padding:4px 8px">${scenarioLabels[name] ?? name}</td>` +
+    [data.cumulative.last7[name] ?? 0, data.cumulative.last30[name] ?? 0, data.cumulative.totals[name] ?? 0]
+      .map((v) => `<td align="right" style="padding:4px 8px">${signed(v)}</td>`)
+      .join("") +
+    "</tr>";
+  const cumRows = Object.keys(scenarioLabels).map(cumRow).join("\n");
+  const subject = `Octopus tariff report ${data.day}: best ${best ? best.name : "n/a"} (${signedHtml(netGain(best))}), optimised +${(data.optimisedUpliftP / 100).toFixed(2)}`;
   const html = `<div style="font-family:-apple-system,Segoe UI,sans-serif;font-size:14px;color:#222">
 <h2 style="margin:0 0 4px">York tariff report — ${data.day}</h2>
 <p style="margin:0 0 12px;color:#555">PV ${data.pvKwh.toFixed(1)} kWh · exported ${data.exportKwh.toFixed(1)} kWh · imported ${data.importKwh.toFixed(1)} kWh · battery ${config.battery.capacityKwh} kWh · telemetry ${data.coverage}/48 half-hours</p>
-<h3 style="margin:12px 0 4px">Yesterday replayed on each tariff combination (energy only, excl. standing charges)</h3>
+<h3 style="margin:12px 0 4px">Yesterday replayed on each tariff combination</h3>
 <table border="1" cellpadding="2" cellspacing="0" style="border-collapse:collapse;border-color:#ddd">
-<tr style="background:#f4f4f4"><th align="left" style="padding:4px 8px">Scenario</th><th>Import cost</th><th>Export revenue</th><th>Standing</th><th>Net cost</th></tr>
+<tr style="background:#f4f4f4"><th align="left" style="padding:4px 8px">Scenario</th><th>Import</th><th>Export</th><th>Standing</th><th>Net gain</th></tr>
 ${rows}
 </table>
 <h3 style="margin:16px 0 4px">Go + Agile with optimised battery dispatch</h3>
-<p style="margin:0">Extra profit vs actual behaviour: <b>${money(data.optimisedUpliftP)}</b><br><span style="color:#555">${data.optimisedNote}</span></p>
-<h3 style="margin:16px 0 4px">Running totals (${data.cumulative.days} days)</h3>
+<p style="margin:0">Extra profit vs actual behaviour: <b>${signed(data.optimisedUpliftP)}</b><br><span style="color:#555">${data.optimisedNote}</span></p>
+<h3 style="margin:16px 0 4px">Net gain totals (${data.cumulative.days} days recorded)</h3>
 <table border="1" cellpadding="2" cellspacing="0" style="border-collapse:collapse;border-color:#ddd">
-<tr style="background:#f4f4f4"><th align="left" style="padding:4px 8px">Scenario</th><th>Cumulative net cost</th></tr>
+<tr style="background:#f4f4f4"><th align="left" style="padding:4px 8px">Scenario</th><th>Last 7 days</th><th>Last 30 days</th><th>All time</th></tr>
 ${cumRows}
 </table>
-<p style="color:#888;font-size:12px;margin-top:16px">Generated by octopus-poller. Export revenue assumes an export MPAN is installed. Standing charges fetched live from Octopus (current ${money(standing.current ?? 0)}/day, Go ${money(standing.go ?? 0)}/day, Agile in+out ${money((standing.agileImport ?? 0) + (standing.agileExport ?? 0))}/day). Newport excluded (meter data lags ~33h).</p>
+<p style="color:#888;font-size:12px;margin-top:16px">Generated by octopus-poller. Positive = money earned, negative = money paid. Export revenue assumes an export MPAN is installed. Standing charges fetched live from Octopus (current ${money(standing.current ?? 0)}/day, Go ${money(standing.go ?? 0)}/day, Agile in+out ${money((standing.agileImport ?? 0) + (standing.agileExport ?? 0))}/day). Newport excluded (meter data lags ~33h).</p>
 </div>`;
   return { subject, html };
+}
+
+function signedHtml(pence: number): string {
+  return `${pence >= 0 ? "+" : "-"}£${Math.abs(pence / 100).toFixed(2)}`;
 }
 
 export async function runDailyReport(
@@ -296,7 +310,7 @@ export async function runDailyReport(
 
   const scenarios = computeScenarios({ flows }, prices, config, reportCfg.goDayPence);
   const tariffCode = (await influx.query(`from(bucket:"${config.influx.bucket}")
-  |> range(start: -7d)
+  |> range(start: -400d)
   |> filter(fn: (r) => r._measurement == "octopus_price" and r.site == "${reportCfg.site}" and r.source == "tariff" and r.direction == "import")
   |> group(columns: ["tariff_code"])
   |> first()
@@ -322,35 +336,51 @@ export async function runDailyReport(
     scenarios,
     optimisedUpliftP: uplift.upliftP,
     optimisedNote: uplift.note,
-    cumulative: { days: 1, totals: {} }
+    cumulative: { days: 1, totals: {}, last7: {}, last30: {} }
   };
 
-  // Cumulative totals from stored report points
+  // Cumulative totals from stored report points (per-day rows)
   const history = await influx.query(`from(bucket:"${config.influx.bucket}")
   |> range(start:-400d)
   |> filter(fn: (r) => r._measurement == "octopus_tariff_report" and r.site == "${reportCfg.site}")
   |> group(columns: ["day"])
   |> first()
   |> group()`);
+  const label = (name: string) => `gain_${name}`;
+  const names = ["current", "go_var", "go_agile", "go_prime", "agile_agile"];
+  const dayGain = (s: Scenario): number => s.exportRevP - s.importCostP - s.standingP;
   const totals: Record<string, number> = {};
+  const last7: Record<string, number> = {};
+  const last30: Record<string, number> = {};
   const seenDays = new Set<string>();
+  const countedDays = new Set<string>();
+  const from7 = dayStart.minus({ days: 6 }).toISODate()!;
+  const from30 = dayStart.minus({ days: 29 }).toISODate()!;
+  const addDays = (target: Record<string, number>, row: Record<string, string>) => {
+    for (const [key, value] of Object.entries(row)) {
+      if (key.startsWith("gain_") || key === "uplift_opt_pence") target[key] = (target[key] ?? 0) + Number(value);
+    }
+  };
   for (const row of history) {
     seenDays.add(row.day);
-    for (const [key, value] of Object.entries(row)) {
-      if (key.startsWith("net_") || key === "uplift_opt_pence") totals[key] = (totals[key] ?? 0) + Number(value);
-    }
+    if (Object.keys(row).some((k) => k.startsWith("gain_"))) countedDays.add(row.day);
+    addDays(totals, row);
+    if (row.day >= from7) addDays(last7, row);
+    if (row.day >= from30) addDays(last30, row);
   }
   if (seenDays.has(day) && !opts.dryRun && !opts.force) throw new Error(`report for ${day} already sent`);
-  const label = (name: string) => `net_${name}`;
-  const names = ["current", "go_var", "go_agile", "go_prime", "agile_agile"];
-  const freshDay = !seenDays.has(day);
+  const freshDay = !countedDays.has(day);
   if (freshDay) {
     // include the freshly computed day in the running totals
-    data.scenarios.forEach((s, i) => (totals[label(names[i])] = (totals[label(names[i])] ?? 0) + s.importCostP - s.exportRevP + s.standingP));
-    totals["uplift_opt_pence"] = (totals["uplift_opt_pence"] ?? 0) + uplift.upliftP;
+    const freshRow: Record<string, string> = { day };
+    data.scenarios.forEach((s, i) => (freshRow[label(names[i])] = String(s.exportRevP - s.importCostP - s.standingP)));
+    freshRow["uplift_opt_pence"] = String(uplift.upliftP);
+    addDays(totals, freshRow);
+    if (day >= from7) addDays(last7, freshRow);
+    if (day >= from30) addDays(last30, freshRow);
     seenDays.add(day);
   }
-  data.cumulative = { days: seenDays.size, totals };
+  data.cumulative = { days: seenDays.size, totals, last7, last30 };
 
   const { subject, html } = renderEmail(data, config, standing);
   if (opts.dryRun) {
@@ -363,7 +393,7 @@ export async function runDailyReport(
   // Only mark the day as sent after the email actually went out
   if (freshDay) {
     const fields: Record<string, number> = { uplift_opt_pence: round(uplift.upliftP), pv_kwh: round(data.pvKwh), export_kwh: round(data.exportKwh), import_kwh: round(data.importKwh) };
-    data.scenarios.forEach((s, i) => (fields[label(names[i])] = round(s.importCostP - s.exportRevP + s.standingP)));
+    data.scenarios.forEach((s, i) => (fields[label(names[i])] = round(dayGain(s))));
     await influx.write([
       {
         measurement: `${config.measurementPrefix}tariff_report`,
