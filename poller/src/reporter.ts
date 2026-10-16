@@ -20,6 +20,13 @@ interface Scenario {
   note?: string;
 }
 
+interface NewportPvDay {
+  day: string;
+  kwh: number;
+  peakKw: number;
+  peakMinute: number;
+}
+
 const netGain = (s: Scenario): number => s.exportRevP - s.importCostP - s.standingP;
 
 interface ReportData {
@@ -69,6 +76,44 @@ async function fetchFlows(influx: InfluxWriter, bucket: string, from: Date, to: 
     });
   }
   return flows;
+}
+
+/**
+ * Daily Newport PV totals from sma_pv points (written by the Sunny Portal
+ * module). Returns one entry per UK day with data, oldest first.
+ */
+async function fetchNewportPv(
+  influx: InfluxWriter,
+  bucket: string,
+  site: string,
+  tz: string,
+  from: DateTime,
+  to: DateTime
+): Promise<NewportPvDay[]> {
+  const rows = await influx.query(`from(bucket:"${bucket}")
+  |> range(start: ${from.toUTC().toISO()}, stop: ${to.toUTC().toISO()})
+  |> filter(fn: (r) => r._measurement == "sma_pv" and r.site == "${site}")
+  |> group(columns: ["_field", "_time"])
+  |> first()
+  |> group()
+  |> keep(columns: ["_field", "_time", "_value"])`);
+  const byDay = new Map<string, NewportPvDay>();
+  for (const row of rows) {
+    if (!row._time) continue;
+    const t = DateTime.fromISO(row._time).setZone(tz);
+    if (!t.isValid) continue;
+    const value = Number(row._value);
+    if (!Number.isFinite(value)) continue;
+    const day = t.toISODate()!;
+    const entry = byDay.get(day) ?? { day, kwh: 0, peakKw: 0, peakMinute: 0 };
+    if (row._field === "energy_kwh") entry.kwh += value;
+    if (row._field === "power_kw" && value > entry.peakKw) {
+      entry.peakKw = value;
+      entry.peakMinute = t.hour * 60 + t.minute;
+    }
+    byDay.set(day, entry);
+  }
+  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
 async function fetchPriceMaps(
@@ -270,7 +315,43 @@ const signed = (pence: number): string => {
   return `<span style="color:${colour}">${value >= 0 ? "+" : "−"}£${Math.abs(value).toFixed(2)}</span>`;
 };
 
-function renderEmail(data: ReportData, config: PollerConfig, standing: Record<string, number>): { subject: string; html: string } {
+const hhmm = (minute: number): string =>
+  `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+
+/** Newport PV block: yesterday's generation from sma_pv, plus the last week of dailies. */
+function newportPvSection(days: NewportPvDay[], day: string): { html: string; kwh: number | null } {
+  const yesterday = days.find((d) => d.day === day);
+  if (!yesterday || yesterday.kwh <= 0) return { html: "", kwh: null };
+  const prior = days.filter((d) => d.day < day).slice(-7);
+  const avg = prior.length ? prior.reduce((t, d) => t + d.kwh, 0) / prior.length : 0;
+  const week = days.slice(-7);
+  const head = week
+    .map((d) => `<td align="center" style="padding:3px 6px;background:#f4f4f4">${d.day.slice(5)}</td>`)
+    .join("");
+  const cells = week
+    .map(
+      (d) =>
+        `<td align="center" style="padding:3px 6px${d.day === day ? ";background:#eef7ee" : ""}"><b>${d.kwh.toFixed(1)}</b></td>`
+    )
+    .join("");
+  const html = `<h3 style="margin:16px 0 4px">Newport Pagnell PV — House Roof (SMA SB3000TL-20, 3.2 kWp)</h3>
+<p style="margin:0 0 6px">Generated <b>${yesterday.kwh.toFixed(1)} kWh</b>${
+    yesterday.peakKw > 0 ? ` · peak ${yesterday.peakKw.toFixed(2)} kW at ${hhmm(yesterday.peakMinute)}` : ""
+  }${avg > 0 ? ` · previous 7-day average ${avg.toFixed(1)} kWh/day` : ""}</p>
+<table border="1" cellpadding="2" cellspacing="0" style="border-collapse:collapse;border-color:#ddd">
+<tr>${head}</tr>
+<tr>${cells}</tr>
+</table>
+<p style="color:#888;font-size:12px;margin:4px 0 0">Sunny Portal 15-minute averages; the legacy Webconnect card uploads in bursts, so the last slots of a day can arrive after midnight and be missed.</p>`;
+  return { html, kwh: yesterday.kwh };
+}
+
+function renderEmail(
+  data: ReportData,
+  config: PollerConfig,
+  standing: Record<string, number>,
+  newportPv: NewportPvDay[]
+): { subject: string; html: string } {
   const best = [...data.scenarios].sort((a, b) => netGain(b) - netGain(a))[0];
   const rows = data.scenarios
     .map(
@@ -299,7 +380,8 @@ function renderEmail(data: ReportData, config: PollerConfig, standing: Record<st
       .join("") +
     "</tr>";
   const cumRows = Object.keys(scenarioLabels).map(cumRow).join("\n");
-  const subject = `Octopus tariff report ${data.day}: best ${best ? best.name : "n/a"} (${signedHtml(netGain(best))}), optimised +${(data.optimisedUpliftP / 100).toFixed(2)}`;
+  const pv = newportPvSection(newportPv, data.day);
+  const subject = `Octopus tariff report ${data.day}: best ${best ? best.name : "n/a"} (${signedHtml(netGain(best))}), optimised +${(data.optimisedUpliftP / 100).toFixed(2)}${pv.kwh !== null ? ` · Newport PV ${pv.kwh.toFixed(1)} kWh` : ""}`;
   const html = `<div style="font-family:-apple-system,Segoe UI,sans-serif;font-size:14px;color:#222">
 <h2 style="margin:0 0 4px">York tariff report — ${data.day}</h2>
 <p style="margin:0 0 12px;color:#555">PV ${data.pvKwh.toFixed(1)} kWh · exported ${data.exportKwh.toFixed(1)} kWh · imported ${data.importKwh.toFixed(1)} kWh · battery ${config.battery.capacityKwh} kWh · telemetry ${data.coverage}/48 half-hours</p>
@@ -316,7 +398,8 @@ ${rows}
 <tr style="background:#f4f4f4"><th align="left" style="padding:4px 8px">Scenario</th><th>Last 7 days</th><th>Last 30 days</th><th>All time</th></tr>
 ${cumRows}
 </table>
-<p style="color:#888;font-size:12px;margin-top:16px">Generated by octopus-poller. Positive = money earned, negative = money paid. Export revenue assumes an export MPAN is installed. Standing charges fetched live from Octopus (current ${money(standing.current ?? 0)}/day, Go ${money(standing.go ?? 0)}/day, Agile in+out ${money((standing.agileImport ?? 0) + (standing.agileExport ?? 0))}/day). Newport excluded (meter data lags ~33h).</p>
+${pv.html}
+<p style="color:#888;font-size:12px;margin-top:16px">Generated by octopus-poller. Positive = money earned, negative = money paid. Export revenue assumes an export MPAN is installed. Standing charges fetched live from Octopus (current ${money(standing.current ?? 0)}/day, Go ${money(standing.go ?? 0)}/day, Agile in+out ${money((standing.agileImport ?? 0) + (standing.agileExport ?? 0))}/day). Newport excluded from the tariff replay (import-only meter, data lags ~33h); its PV generation is shown above.</p>
 </div>`;
   return { subject, html };
 }
@@ -418,7 +501,22 @@ export async function runDailyReport(
   }
   data.cumulative = { days: rowsByDay.size, totals, last7, last30 };
 
-  const { subject, html } = renderEmail(data, config, standing);
+  // Newport PV block (best-effort: absent sma_pv data simply omits the section)
+  let newportPv: NewportPvDay[] = [];
+  try {
+    newportPv = await fetchNewportPv(
+      influx,
+      config.influx.bucket,
+      config.sma.site,
+      tz,
+      dayStart.minus({ days: 7 }),
+      to
+    );
+  } catch (error) {
+    console.log(`newport pv fetch failed: ${error instanceof Error ? error.message : error}`);
+  }
+
+  const { subject, html } = renderEmail(data, config, standing, newportPv);
   if (opts.dryRun) {
     console.log(`DRY RUN ${subject}\n${html}`);
     return subject;

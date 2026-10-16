@@ -57,6 +57,8 @@ When `REPORT_ENABLED=true`, each morning at `REPORT_TIME` (UK) the poller emails
 
 Standing charges are fetched live from the Octopus API (including the current tariff's daily standing charge). Figures use a money-flow sign convention — export revenue positive, import cost and standing charges negative, so the net-gain column reads directly as profit or loss. Each day's figures are stored as `octopus_tariff_report` points and the email shows **last-7-day, last-30-day and all-time** net-gain totals so weekly and monthly averages build up from real data. Mail goes through the LAN SMTP relay (`REPORT_SMTP_HOST`, e.g. yorkstorj's postfix relaying via Gmail). A day is only marked sent after the email leaves, so restarts never double-send (pass `force` to `runDailyReport` to re-send). Failed sends retry after a 10-minute backoff instead of skipping the day.
 
+When `sma_pv` data exists, the email also carries a **Newport PV section**: yesterday's generation, peak power and time, the previous 7-day average and a daily strip for the last week (the day's kWh also appears in the subject line).
+
 ## Sunny Portal (Newport PV)
 
 The Newport inverter (SB3000TL-20, Webconnect 1.0) has no local API and its Home Manager 1.0 has been retired from SMA's cloud, so generation is read from **Sunny Portal** (`SMA_ENABLED=true`):
