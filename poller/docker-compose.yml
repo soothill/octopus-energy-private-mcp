@@ -6,6 +6,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    # yorkstorj resolves via Tailscale MagicDNS on the host, which Docker's
+    # embedded DNS does not inherit — pin it for the SMTP relay.
+    extra_hosts:
+      - "yorkstorj:100.97.155.128"
     # Join the docker network your InfluxDB 2.x container is attached to so
     # INFLUX_URL can use the container name (e.g. http://influxdb:8086).
     # networks:

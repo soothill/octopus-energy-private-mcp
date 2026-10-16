@@ -47,6 +47,13 @@ export interface PollerConfig {
     goDayPence: number;
     sigenergyBucket: string;
   };
+  sma: {
+    enabled: boolean;
+    username: string;
+    password: string;
+    site: string;
+    intervalMs: number;
+  };
 }
 
 function env(name: string): string | undefined {
@@ -170,6 +177,13 @@ export function loadPollerConfig(): PollerConfig {
       time: env("REPORT_TIME") ?? "07:30",
       goDayPence: numberEnv("REPORT_GO_DAY_PENCE", 26.07, 0, 200),
       sigenergyBucket: env("REPORT_SIGENERGY_BUCKET") ?? "sigenergy"
+    },
+    sma: {
+      enabled: (env("SMA_ENABLED") ?? "").toLowerCase() === "true",
+      username: env("SMA_USERNAME") ?? "",
+      password: env("SMA_PASSWORD") ?? "",
+      site: env("SMA_SITE") ?? "newport",
+      intervalMs: integerEnv("SMA_POLL_INTERVAL_MINUTES", 15, 5, 720) * 60_000
     }
   };
 }

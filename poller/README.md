@@ -14,6 +14,7 @@ A Dockerized poller that records Octopus Agile **import and export prices** (day
 | `octopus_intelligent_dispatch` | `site`, `device_id`, `device_type`, `status` (planned/completed), `dispatch_type` | `energy_kwh`, `duration_minutes` | Intelligent Octopus (SmartFlex) dispatch windows from the Kraken GraphQL API: planned slots per device (~24h ahead) and completed slots for the account (~12h behind). |
 | `octopus_poll_status` | `site`, `task` | `ok`, `records` | Liveness marker per poll. |
 | `octopus_tariff_report` | `site`, `day` | `gain_current_pence`, `gain_go_var_pence`, `gain_go_agile_pence`, `gain_go_prime_pence`, `gain_agile_agile_pence`, `gain_go_agile_opt_pence`, `uplift_opt_pence`, `pv_kwh`, `export_kwh`, `import_kwh` | Daily tariff-comparison replay (see "Daily tariff report"). One point per day; positive gain = money earned. The emailed report's 7-day / 30-day / all-time totals are column sums over the window. |
+| `sma_pv` | `site` | `power_kw` (15-min average), `energy_kwh` (slot energy = power × 0.25 h) | Newport Pagnell PV generation from Sunny Portal (see "Sunny Portal"). Points are timestamped at the 15-minute slot start (true UTC) and rewritten idempotently each poll. |
 
 ## Intelligent Octopus (IOG) sites
 
@@ -54,7 +55,17 @@ When `REPORT_ENABLED=true`, each morning at `REPORT_TIME` (UK) the poller emails
 - Agile import + Agile export
 - **Go + Agile + optimised battery** — the same day replayed with the battery strategy: grid-charge overnight in the Go cheap window → export into the highest morning rates → solar refills through midday → export most of it 16:00–19:00 → hold back the reserve to cover evening load until the cheap window restarts. Each cycle only counts when profitable on the day's actual prices.
 
-Standing charges are fetched live from the Octopus API (including the current tariff's daily standing charge). Figures use a money-flow sign convention — export revenue positive, import cost and standing charges negative, so the net-gain column reads directly as profit or loss. Each day's figures are stored as `octopus_tariff_report` points and the email shows **last-7-day, last-30-day and all-time** net-gain totals so weekly and monthly averages build up from real data. Mail goes through the LAN SMTP relay (`REPORT_SMTP_HOST`, e.g. yorkstorj's postfix relaying via Gmail). A day is only marked sent after the email leaves, so restarts never double-send (pass `force` to `runDailyReport` to re-send).
+Standing charges are fetched live from the Octopus API (including the current tariff's daily standing charge). Figures use a money-flow sign convention — export revenue positive, import cost and standing charges negative, so the net-gain column reads directly as profit or loss. Each day's figures are stored as `octopus_tariff_report` points and the email shows **last-7-day, last-30-day and all-time** net-gain totals so weekly and monthly averages build up from real data. Mail goes through the LAN SMTP relay (`REPORT_SMTP_HOST`, e.g. yorkstorj's postfix relaying via Gmail). A day is only marked sent after the email leaves, so restarts never double-send (pass `force` to `runDailyReport` to re-send). Failed sends retry after a 10-minute backoff instead of skipping the day.
+
+## Sunny Portal (Newport PV)
+
+The Newport inverter (SB3000TL-20, Webconnect 1.0) has no local API and its Home Manager 1.0 has been retired from SMA's cloud, so generation is read from **Sunny Portal** (`SMA_ENABLED=true`):
+
+1. The poller logs in headlessly with `SMA_USERNAME`/`SMA_PASSWORD` (the sunnyportal.com SMA ID): Keycloak login form → OAuth code → the portal's `Start.aspx` auto-post dance.
+2. Every `SMA_POLL_INTERVAL_MINUTES` it renders the Analysis day chart (`presetting=day`) and reads the JSON data points (`mode=last_info`), writing them to `sma_pv` tagged `site=SMA_SITE`.
+3. Session expiry is detected on the API response and re-login happens on the next cycle.
+
+Chart timestamps are plant wall-clock values and are re-zoned via `POLLER_TIMEZONE`. Expect a **1–3 h lag**: the legacy Webconnect card uploads in bursts, and the portal only exposes 15-minute averages (no live power). Grid import/export are not available (dead Home Manager) — PV only.
 
 ## Configure
 
@@ -95,7 +106,7 @@ SELECT mean("spread_pence") FROM "octopus_battery_signal" WHERE time > now() - 7
 
 ## Design notes
 
-- Outbound calls are restricted to `https://api.octopus.energy`; API keys are sent only there (Basic auth). No arbitrary URLs.
+- Outbound calls go to `https://api.octopus.energy` (Octopus API keys are sent only there, Basic auth) and, when the Sunny Portal module is enabled, `https://www.sunnyportal.com` + `https://login.sma.energy` (SMA ID credentials sent only to the Keycloak login form).
 - Per-site sequential throttle (default ≥1 s between calls) with retry/backoff on 429/5xx.
 - Export MPANs report exported kWh as "consumption" per Octopus docs; the poller labels them `direction=export`.
 - If a site has no export meter, export prices and the signal are skipped with a log line.
