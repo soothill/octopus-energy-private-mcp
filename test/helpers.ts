@@ -21,6 +21,8 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     timezone: "Europe/London",
     cacheDir: "/private/tmp/octopus-mcp-test-cache",
     cacheEnabled: false,
+    historyEnabled: false,
+    historyBackfillYears: 3,
     updateCheckEnabled: false,
     requestsPerMinute: 120,
     minRequestIntervalMs: 100,

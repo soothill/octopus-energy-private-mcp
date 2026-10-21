@@ -26,6 +26,8 @@ export interface ServerConfig {
   timezone: string;
   cacheDir: string;
   cacheEnabled: boolean;
+  historyEnabled: boolean;
+  historyBackfillYears: number;
   updateCheckEnabled: boolean;
   requestsPerMinute: number;
   minRequestIntervalMs: number;
@@ -174,6 +176,8 @@ export function loadConfig(): ServerConfig {
     cacheDir:
       optionalEnv("OCTOPUS_CACHE_DIR") ?? join(homedir(), ".cache", "octopus-energy-mcp"),
     cacheEnabled: booleanEnv("OCTOPUS_CACHE_ENABLED", true),
+    historyEnabled: booleanEnv("OCTOPUS_HISTORY_ENABLED", true),
+    historyBackfillYears: integerEnv("OCTOPUS_HISTORY_BACKFILL_YEARS", 3, 0, 10),
     updateCheckEnabled: booleanEnv("OCTOPUS_UPDATE_CHECK_ENABLED", true),
     requestsPerMinute: integerEnv("OCTOPUS_REQUESTS_PER_MINUTE", 30, 1, 120),
     minRequestIntervalMs: integerEnv("OCTOPUS_MIN_REQUEST_INTERVAL_MS", 1000, 100, 60_000),
@@ -206,6 +210,8 @@ export function publicConfig(config: ServerConfig): Record<string, unknown> {
     smart_flex_device_configured: Boolean(config.smartFlexDeviceId),
     timezone: config.timezone,
     cache_enabled: config.cacheEnabled,
+    history_store_enabled: config.historyEnabled,
+    history_backfill_years: config.historyBackfillYears,
     cache_directory: config.cacheDir,
     update_check_enabled: config.updateCheckEnabled,
     requests_per_minute: config.requestsPerMinute,

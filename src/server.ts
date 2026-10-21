@@ -1,9 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { DateTime } from "luxon";
+import { join } from "node:path";
 import { z } from "zod";
 import { analyseUsage, compareAnalyses, estimateCost, findCheapestWindows, normalizeConsumption } from "./analytics.js";
 import { FileCache } from "./cache.js";
 import { publicConfig, type ServerConfig } from "./config.js";
+import { HistoryEngine } from "./history.js";
 import { OctopusGraphQlClient } from "./graphql-client.js";
 import {
   isDeviceAwareEvTariff,
@@ -14,6 +16,7 @@ import {
 import { PERIOD_ALIASES, previousEquivalentPeriod, resolvePeriod } from "./periods.js";
 import { RequestRateLimiter } from "./rate-limiter.js";
 import { SiteRegistry } from "./sites.js";
+import { HistoryStore } from "./store.js";
 import { formatUpdateNotice, notCheckedUpdateStatus, type UpdateStatus } from "./update-check.js";
 import { CURRENT_VERSION } from "./version.js";
 import type {
@@ -221,6 +224,7 @@ export interface ServerDependencies {
   rest?: OctopusRestClient;
   graphql?: OctopusGraphQlClient;
   sites?: SiteRegistry;
+  historyStore?: HistoryStore;
   updateStatus?: UpdateStatus;
 }
 
@@ -229,6 +233,8 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
   const limiter = dependencies.limiter ?? new RequestRateLimiter(config.requestsPerMinute, config.minRequestIntervalMs);
   const rest = dependencies.rest ?? new OctopusRestClient(config, cache, limiter);
   const graphql = dependencies.graphql ?? new OctopusGraphQlClient(config, cache, limiter);
+  const historyStore =
+    dependencies.historyStore ?? new HistoryStore(join(config.cacheDir, "history"), config.cacheEnabled && config.historyEnabled);
   const registry =
     dependencies.sites ??
     new SiteRegistry(config, { cache, limiter, rest, graphql });
@@ -240,7 +246,7 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     {
       capabilities: { tools: {}, resources: {}, prompts: {} },
       instructions:
-        "Privacy-first, read-only Octopus Energy access. Start with octopus_connection_status and octopus_discover_meters. Multiple sites may be configured; pass the site parameter (for example site=\"York\") on account, consumption, EV and smart-device tools, or omit it to use the default site. Use octopus_list_sites to see configured sites. Prefer named periods and local analysis tools; use exact tariff codes for conventional costs, octopus_get_ev_tariff_pricing for device-aware EV rates, and octopus_get_ev_charge_costs for device-aware EV charge history. Respect truncated flags and unit/cost warnings. Requests are locally throttled and cached. Credentials may only be sent to api.octopus.energy; never ask the user to paste them into chat. octopus_clear_cache only deletes local response files and requires confirm=true." +
+        "Privacy-first, read-only Octopus Energy access. Start with octopus_connection_status and octopus_discover_meters. Multiple sites may be configured; pass the site parameter (for example site=\"York\") on account, consumption, EV and smart-device tools, or omit it to use the default site. Use octopus_list_sites to see configured sites. Prefer named periods and local analysis tools; use exact tariff codes for conventional costs, octopus_get_ev_tariff_pricing for device-aware EV rates, and octopus_get_ev_charge_costs for device-aware EV charge history. For repeated what-if analysis over long windows, run octopus_sync_history once to build the persistent local history store, then use octopus_whatif_usage, which replays stored consumption and rates with minimal API calls. Respect truncated flags and unit/cost warnings. Requests are locally throttled and cached. Credentials may only be sent to api.octopus.energy; never ask the user to paste them into chat. octopus_clear_cache only deletes local response files and history shards and requires confirm=true." +
         (updateNotice ? ` IMPORTANT: Tell the user about this update before using other tools. ${updateNotice}` : "")
     }
   );
@@ -279,6 +285,11 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
       configuration: publicConfig(config),
       update: updateStatus,
       cache: await cache.stats(),
+      history_store: {
+        enabled: config.historyEnabled,
+        directory: join(config.cacheDir, "history"),
+        series: await historyStore.seriesInfo()
+      },
       local_rate_limiter: limiter.snapshot(),
       privacy: {
         transport: "local stdio",
@@ -768,6 +779,155 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     })
   );
 
+  type HistoryOutcome = import("./history.js").SyncOutcome | { skipped: string; reason: string };
+
+  server.registerTool(
+    "octopus_sync_history",
+    {
+      title: "Build local history store",
+      description: "Backfill the persistent local history store: metered consumption for this site plus unit rates and standing charges for past and current single-register tariffs. Once built, what-if windows replay locally with minimal Octopus calls.",
+      inputSchema: z.object({
+        account_number: z.string().optional(),
+        ...siteField,
+        since: z.string().optional().describe("ISO date to start consumption backfill; defaults to the earliest tariff agreement or OCTOPUS_HISTORY_BACKFILL_YEARS back"),
+        include_gas: z.boolean().default(true),
+        include_tariff_history: z.boolean().default(true)
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true
+      }
+    },
+    safe(async ({ account_number, site, since, include_gas, include_tariff_history }) => {
+      if (since && Number.isNaN(Date.parse(since))) {
+        throw new Error(`since must be a valid ISO date, got: ${since}`);
+      }
+      const runtime = registry.resolve(site);
+      const engine = new HistoryEngine(runtime, historyStore);
+      const meters = await runtime.rest.discoverMeters(account_number);
+      const warnings: string[] = [];
+      const results: HistoryOutcome[] = [];
+      let consumption_series = 0;
+      let rate_series = 0;
+      for (const meter of meters) {
+        if (meter.fuel === "gas" && !include_gas) continue;
+        try {
+          const outcome = await engine.syncConsumption(meter, since);
+          consumption_series += 1;
+          results.push(outcome);
+        } catch (error) {
+          warnings.push(
+            `Consumption sync skipped for ${meter.fuel}/${meter.direction} ${meter.meter_point} serial ${meter.serial_number}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
+      if (include_tariff_history) {
+        const seen = new Set<string>();
+        for (const meter of meters) {
+          for (const agreement of meter.agreements) {
+            const tariff_code = agreement.tariff_code.toUpperCase();
+            const signature = `${meter.fuel}:${tariff_code}`;
+            if (seen.has(signature)) continue;
+            seen.add(signature);
+            if (isDeviceAwareEvTariff(tariff_code) || isDualRegisterTariff(tariff_code)) continue;
+            try {
+              const outcomes = await engine.syncTariff({ tariff_code, fuel: meter.fuel }, since);
+              rate_series += outcomes.length;
+              results.push(...outcomes);
+            } catch (error) {
+              results.push({
+                skipped: tariff_code,
+                reason: error instanceof Error ? error.message : String(error)
+              });
+            }
+          }
+        }
+      }
+      return {
+        site: runtime.site.name,
+        store_directory: historyStore.directory,
+        consumption_series,
+        rate_series,
+        totals: {
+          added_records: results.reduce((sum, item) => sum + ("added" in item ? item.added : 0), 0),
+          stored_records: results.reduce((sum, item) => sum + ("records" in item ? item.records : 0), 0),
+          api_pages: results.reduce((sum, item) => sum + ("api_pages" in item ? item.api_pages : 0), 0)
+        },
+        results,
+        ...(warnings.length ? { warnings } : {})
+      };
+    })
+  );
+
+  server.registerTool(
+    "octopus_whatif_usage",
+    {
+      title: "What-if tariff replay (local store)",
+      description: "Rank up to eight tariff scenarios over any window using the persistent local history store; gaps are fetched once then replayed offline.",
+      inputSchema: z.object({
+        ...periodFields,
+        ...meterFields,
+        ...siteField,
+        gas_unit: gasUnitField,
+        include_standing_charges: z.boolean().default(true),
+        scenarios: z.array(z.object({
+          label: z.string().optional(),
+          fuel: z.enum(["electricity", "gas"]).optional(),
+          tariff_code: z.string().min(1),
+          product_code: z.string().min(1).optional()
+        })).min(1).max(8)
+      }),
+      annotations: readOnly
+    },
+    safe(async (args) => {
+      for (const scenario of args.scenarios) assertCostTariffSupported(scenario.tariff_code);
+      const range = resolvePeriod(args, config.timezone);
+      const runtime = registry.resolve(args.site);
+      const engine = new HistoryEngine(runtime, historyStore);
+      const result = await engine.whatIfUsage({
+        meter_selector: {
+          ...(args.fuel ? { fuel: args.fuel } : {}),
+          ...(args.direction ? { direction: args.direction } : {}),
+          ...(args.property_id !== undefined ? { property_id: args.property_id } : {}),
+          ...(args.meter_point ? { meter_point: args.meter_point } : {}),
+          ...(args.serial_number ? { serial_number: args.serial_number } : {})
+        },
+        range,
+        scenarios: args.scenarios,
+        include_standing_charges: args.include_standing_charges,
+        gas_unit: args.gas_unit
+      });
+      const totals = result.scenarios.map((scenario) => scenario.estimate.total_cost_pence);
+      const mostExpensive = Math.max(...totals);
+      const cheapestTotal = Math.min(...totals);
+      const ranking = [...result.scenarios]
+        .sort((a, b) => a.estimate.total_cost_pence - b.estimate.total_cost_pence)
+        .map((scenario, index) => ({
+          rank: index + 1,
+          ...scenario.estimate,
+          rate_provenance: scenario.rate_provenance,
+          saving_vs_most_expensive_gbp: totals.length > 1
+            ? Number(((mostExpensive - scenario.estimate.total_cost_pence) / 100).toFixed(2))
+            : 0,
+          extra_vs_cheapest_gbp: Number(((scenario.estimate.total_cost_pence - cheapestTotal) / 100).toFixed(2))
+        }));
+      return {
+        meter: result.meter,
+        requested_period: range,
+        data_source: result.data_source,
+        consumption: result.consumption,
+        ranking,
+        cheapest: result.cheapest,
+        api_requests: result.api_requests,
+        warnings: [...result.warnings]
+      };
+    })
+  );
+
   server.registerTool(
     "octopus_get_smart_flex_devices",
     {
@@ -978,9 +1138,10 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
     "octopus_clear_cache",
     {
       title: "Clear local Octopus cache",
-      description: "Delete locally cached API responses. This never changes data at Octopus Energy.",
+      description: "Delete locally cached API responses and, optionally, the persistent history store. This never changes data at Octopus Energy.",
       inputSchema: z.object({
         namespace: z.string().optional().describe("Optional cache namespace; omit to clear all entries"),
+        history: z.boolean().default(false).describe("Also delete the persistent history store shards"),
         confirm: z.literal(true).describe("Must be true to confirm local cache deletion")
       }),
       annotations: {
@@ -990,7 +1151,15 @@ export function createServer(config: ServerConfig, dependencies: ServerDependenc
         openWorldHint: false
       }
     },
-    safe(async ({ namespace }) => ({ removed_entries: await cache.clear(namespace), namespace: namespace ?? "all" }))
+    safe(async ({ namespace, history }) => {
+      const removed_entries = await cache.clear(namespace);
+      const history_result = history ? await historyStore.clear() : null;
+      return {
+        removed_entries,
+        namespace: namespace ?? "all",
+        ...(history_result ? { history_removed_series: history_result.removed_series } : {})
+      };
+    })
   );
 
   server.registerResource(

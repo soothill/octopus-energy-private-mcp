@@ -122,6 +122,7 @@ The image runs as an unprivileged user and persists only the cache volume. Docke
 - “Compare this month with the immediately preceding equivalent period.”
 - “Find the ten cheapest two-hour windows on my Agile tariff tomorrow.”
 - “Replay last month’s actual use against these three exact tariff codes.”
+- “Build my history store, then replay June–September use under Agile, Go, and my current tariff — offline this time.”
 - “Show the four rates on my new Intelligent Octopus Go tariff.”
 - “How much energy and money did Octopus record for my smart and boost EV charging last month?”
 - “Show my current import and export meters and their active agreements.”
@@ -137,6 +138,7 @@ The image runs as an unprivileged user and persists only the cache volume. Docke
 | Products | `octopus_list_products`, `octopus_get_product` |
 | Consumption | `octopus_get_consumption`, `octopus_analyse_usage`, `octopus_compare_usage` |
 | Tariffs | `octopus_get_tariff_rates`, `octopus_get_current_rates`, `octopus_find_cheapest_windows`, `octopus_estimate_cost`, `octopus_compare_tariffs` |
+| What-if replay | `octopus_sync_history`, `octopus_whatif_usage` |
 | EV pricing | `octopus_get_ev_tariff_pricing`, `octopus_get_ev_charge_costs` |
 | Smart devices | `octopus_get_smart_flex_devices`, `octopus_get_smart_meter_devices`, `octopus_get_smart_meter_telemetry`, `octopus_get_completed_dispatches`, `octopus_get_planned_dispatches` |
 | Octoplus/limits | `octopus_get_octoplus_balance`, `octopus_get_api_rate_limits` |
@@ -187,6 +189,15 @@ The newer Intelligent Octopus Go model separates home peak, home off-peak, EV pe
 
 Under Octopus’s published rollout rules, the home normally receives its off-peak price from 23:30–05:30, while the EV receives up to six actual smart-charging hours per midday-to-midday day. Octopus-scheduled charging outside the home window can also make the home off-peak for that half-hour; charging beyond the allowance or using Boost can move the EV to its peak price. See Octopus’s [four-rate and Charge Cap explanation](https://octopus.energy/blog/intelligent-octopus-go-smarter-charging-for-a-greener-grid/). Drive Pack and Power Pack are type-of-use arrangements whose subscription, credits or other account-level adjustments may be separate from the returned charge records; see the [smart tariff terms](https://octopus.energy/policies/smart-tariffs-terms-and-condition/). The Octopus app and statement remain definitive.
 
+## What-if replay over history (local store)
+
+Half-hourly history and published tariff rates are immutable facts once published, so they are safe to keep locally. A persistent **history store** (sharded JSON files under `<OCTOPUS_CACHE_DIR>/history`) lets you ask many what-if questions over long windows without repeatedly paging the rate-limited Octopus API:
+
+1. **`octopus_sync_history`** builds the store once per site: half-hourly consumption for every electricity and gas meter (backfilled to the earliest tariff agreement or `OCTOPUS_HISTORY_BACKFILL_YEARS`), plus unit rates and standing charges for every past and present single-register tariff on the account.
+2. **`octopus_whatif_usage`** then replays any window (named period or explicit dates) against up to eight scenarios, ranked by estimated total cost. Coverage gaps are fetched once, so the first replay warms the store and later replays of the same windows make **zero** API calls. Missing data is retried only every 24 hours so genuinely incomplete windows do not hammer the API.
+
+`octopus_connection_status` reports store series, coverage and sizes, and `octopus_clear_cache` with `history: true` deletes shards outright. The store adds files under the existing private cache directory; it never changes data at Octopus and never store credentials.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -205,6 +216,8 @@ Under Octopus’s published rollout rules, the home normally receives its off-pe
 | `OCTOPUS_SMART_FLEX_DEVICE_ID` | — | Optional planned-dispatch device |
 | `OCTOPUS_CACHE_ENABLED` | `true` | Enable local response cache |
 | `OCTOPUS_CACHE_DIR` | platform user cache | Override private cache path |
+| `OCTOPUS_HISTORY_ENABLED` | `true` | Enable the persistent history store for offline what-ifs (stored under `<OCTOPUS_CACHE_DIR>/history`) |
+| `OCTOPUS_HISTORY_BACKFILL_YEARS` | `3` | Years of consumption/rates backfilled by `octopus_sync_history` (0–10) |
 | `OCTOPUS_UPDATE_CHECK_ENABLED` | `true` | Check the public GitHub `main` version at startup |
 | `OCTOPUS_REQUESTS_PER_MINUTE` | `30` | Conservative local rolling cap, 1–120 |
 | `OCTOPUS_MIN_REQUEST_INTERVAL_MS` | `1000` | Minimum spacing between API attempts |
