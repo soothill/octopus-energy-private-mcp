@@ -8,6 +8,13 @@ services:
       - .env
     environment:
       OCTOPUS_CACHE_DIR: /data/cache
+      # stdio for MCP clients that spawn the container (docker run -i);
+      # switch to http to run as a fixed endpoint like bluelink/volvo.
+      OCTOPUS_TRANSPORT: stdio
+      OCTOPUS_MCP_HOST: 0.0.0.0
+      OCTOPUS_MCP_PORT: 8070
+    ports:
+      - "8070:8070"
     volumes:
       - octopus-energy-cache:/data/cache
 

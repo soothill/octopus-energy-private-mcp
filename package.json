@@ -1,6 +1,6 @@
 {
   "name": "octopus-energy-private-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Privacy-first local MCP server for Octopus Energy usage, tariff and smart-device analysis",
   "type": "module",
   "bin": {

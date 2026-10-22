@@ -16,7 +16,6 @@ LABEL org.opencontainers.image.title="Octopus Energy Private MCP" \
 
 ENV NODE_ENV=production \
     OCTOPUS_CACHE_DIR=/data/cache
-
 RUN groupadd --gid 10001 mcp && \
     useradd --uid 10001 --gid mcp --create-home --shell /usr/sbin/nologin mcp && \
     mkdir -p /app /data/cache && \
@@ -28,5 +27,6 @@ COPY --from=build --chown=mcp:mcp /app/node_modules ./node_modules
 COPY --from=build --chown=mcp:mcp /app/dist ./dist
 
 USER mcp
+EXPOSE 8070
 VOLUME ["/data/cache"]
 ENTRYPOINT ["node", "dist/index.js"]

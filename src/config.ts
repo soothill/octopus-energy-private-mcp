@@ -28,6 +28,10 @@ export interface ServerConfig {
   cacheEnabled: boolean;
   historyEnabled: boolean;
   historyBackfillYears: number;
+  transportHttp: boolean;
+  httpPort: number;
+  httpHost: string;
+  httpToken: string | undefined;
   updateCheckEnabled: boolean;
   requestsPerMinute: number;
   minRequestIntervalMs: number;
@@ -64,6 +68,15 @@ function numberEnv(name: string, fallback: number, min: number, max: number): nu
     throw new Error(`${name} must be a number between ${min} and ${max}`);
   }
   return parsed;
+}
+
+function stringEnumEnv(name: string, allowed: readonly string[], fallback: string): string {
+  const raw = optionalEnv(name);
+  if (!raw) return fallback;
+  if (!allowed.includes(raw)) {
+    throw new Error(`${name} must be one of: ${allowed.join(", ")}`);
+  }
+  return raw;
 }
 
 function booleanEnv(name: string, fallback: boolean): boolean {
@@ -178,6 +191,10 @@ export function loadConfig(): ServerConfig {
     cacheEnabled: booleanEnv("OCTOPUS_CACHE_ENABLED", true),
     historyEnabled: booleanEnv("OCTOPUS_HISTORY_ENABLED", true),
     historyBackfillYears: integerEnv("OCTOPUS_HISTORY_BACKFILL_YEARS", 3, 0, 10),
+    transportHttp: stringEnumEnv("OCTOPUS_TRANSPORT", ["stdio", "http"], "stdio") === "http",
+    httpPort: integerEnv("OCTOPUS_MCP_PORT", 8070, 1, 65_535),
+    httpHost: optionalEnv("OCTOPUS_MCP_HOST") ?? "0.0.0.0",
+    httpToken: optionalEnv("OCTOPUS_MCP_TOKEN"),
     updateCheckEnabled: booleanEnv("OCTOPUS_UPDATE_CHECK_ENABLED", true),
     requestsPerMinute: integerEnv("OCTOPUS_REQUESTS_PER_MINUTE", 30, 1, 120),
     minRequestIntervalMs: integerEnv("OCTOPUS_MIN_REQUEST_INTERVAL_MS", 1000, 100, 60_000),
@@ -212,6 +229,9 @@ export function publicConfig(config: ServerConfig): Record<string, unknown> {
     cache_enabled: config.cacheEnabled,
     history_store_enabled: config.historyEnabled,
     history_backfill_years: config.historyBackfillYears,
+    transport_http: config.transportHttp,
+    http_port: config.httpPort,
+    http_auth_configured: Boolean(config.httpToken),
     cache_directory: config.cacheDir,
     update_check_enabled: config.updateCheckEnabled,
     requests_per_minute: config.requestsPerMinute,

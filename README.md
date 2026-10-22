@@ -116,6 +116,21 @@ For an MCP client that already receives the credentials in its environment:
 
 The image runs as an unprivileged user and persists only the cache volume. Docker is optional; the direct Node path is simpler and starts faster.
 
+### HTTP endpoint mode (mcp-hub style)
+
+Instead of a client spawning the container over stdio, the server can run as a fixed streamable-HTTP endpoint — the same pattern as the bluelink and volvo MCP containers. Set `OCTOPUS_TRANSPORT=http` and expose the port:
+
+```yaml
+environment:
+  OCTOPUS_TRANSPORT: http
+  OCTOPUS_MCP_PORT: 8070
+ports:
+  - "8070:8070"
+```
+
+MCP clients then connect to `http://<host>:8070/mcp` (transport `streamable-http`). Set `OCTOPUS_MCP_TOKEN` to require a bearer token; `GET /` is a health check.
+
+
 ## Typical questions
 
 - “Analyse my electricity usage over the last 30 days and show peak times and data gaps.”
